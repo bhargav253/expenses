@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Expense Tracker{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8 mx-auto">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2><i class="fas fa-cog me-2"></i>Settings</h2>
+            <a href="{{ url_for('dashboard_list') }}" class="btn btn-outline-primary">
+                <i class="fas fa-arrow-left me-1"></i>Back to Dashboards
+            </a>
+        </div>
+
+        <!-- Profile Information -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="fas fa-user me-2"></i>Profile Information</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3 text-center">
+                        <img src="{{ user.get_profile_picture() }}" alt="Profile" class="rounded-circle mb-3" width="100" height="100">
+                    </div>
+                    <div class="col-md-9">
+                        <div class="row mb-3">
+                            <div class="col-sm-3"><strong>Name:</strong></div>
+                            <div class="col-sm-9">{{ session.user.name }}</div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-sm-3"><strong>Email:</strong></div>
+                            <div class="col-sm-9">{{ session.user.email }}</div>
+                        </div>
+                        <div class="row">
+                            <div class="col-sm-3"><strong>Account Created:</strong></div>
+                            <div class="col-sm-9">{{ user.created_at.strftime('%B %d, %Y') if user.created_at else 'N/A' }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI API Configuration -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="fas fa-robot me-2"></i>AI API Configuration</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-4">
+                    Configure your Mistral AI API key to enable AI-powered expense processing and categorization.
+                    Your API key is stored securely and only used for your account.
+                </p>
+                
+                <form id="apiKeyForm">
+                    <div class="mb-3">
+                        <label for="mistral_api_key" class="form-label">Mistral API Key</label>
+                        <div class="input-group">
+                            <input type="password" 
+                                   class="form-control" 
+                                   id="mistral_api_key" 
+                                   name="mistral_api_key"
+                                   value="{{ user.mistral_api_key if user.mistral_api_key else '' }}"
+                                   placeholder="Enter your Mistral API key">
+                            <button class="btn btn-outline-secondary" type="button" id="toggleApiKey">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                        <div class="form-text">
+                            Get your API key from <a href="https://console.mistral.ai/" target="_blank">Mistral AI Console</a>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save me-1"></i>Save API Key
+                    </button>
+                </form>
+                
+                <div id="apiKeyMessage" class="mt-3" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- Security Information -->
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="fas fa-shield-alt me-2"></i>Security & Privacy</h5>
+            </div>
+            <div class="card-body">
+                <div class="security-info-section">
+                    <div class="mb-4">
+                        <h6 class="text-primary"><i class="fas fa-info-circle me-2"></i>Security Features</h6>
+                        <ul class="list-group list-group-flush">
+                            <li class="list-group-item d-flex align-items-center">
+                                <i class="fas fa-check-circle text-success me-2"></i>
+                                <strong>Secure Authentication:</strong> Google OAuth for secure login
+                            </li>
+                            <li class="list-group-item d-flex align-items-center">
+                                <i class="fas fa-check-circle text-success me-2"></i>
+                                <strong>Client-side Processing:</strong> Bank statements processed in your browser
+                            </li>
+                            <li class="list-group-item d-flex align-items-center">
+                                <i class="fas fa-check-circle text-success me-2"></i>
+                                <strong>Encrypted Storage:</strong> API keys and sensitive data are encrypted
+                            </li>
+                            <li class="list-group-item d-flex align-items-center">
+                                <i class="fas fa-check-circle text-success me-2"></i>
+                                <strong>No PDF Uploads:</strong> Original bank statements never leave your device
+                            </li>
+                        </ul>
+                    </div>
+                    
+                    <div class="security-notes-section">
+                        <h6 class="text-warning"><i class="fas fa-exclamation-triangle me-2"></i>Important Notes</h6>
+                        <ul class="list-group list-group-flush">
+                            <li class="list-group-item d-flex align-items-center">
+                                <i class="fas fa-key text-warning me-2"></i>
+                                Your Mistral API key is used only for processing your expense data
+                            </li>
+                            <li class="list-group-item d-flex align-items-center">
+                                <i class="fas fa-file-pdf text-warning me-2"></i>
+                                Bank statement PDFs are processed locally and never uploaded
+                            </li>
+                            <li class="list-group-item d-flex align-items-center">
+                                <i class="fas fa-database text-warning me-2"></i>
+                                Only extracted CSV data is stored on our servers
+                            </li>
+                            <li class="list-group-item d-flex align-items-center">
+                                <i class="fas fa-trash text-warning me-2"></i>
+                                You can delete your API key at any time
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Toggle API key visibility
+    const toggleButton = document.getElementById('toggleApiKey');
+    const apiKeyInput = document.getElementById('mistral_api_key');
+    
+    toggleButton.addEventListener('click', function() {
+        const type = apiKeyInput.getAttribute('type') === 'password' ? 'text' : 'password';
+        apiKeyInput.setAttribute('type', type);
+        toggleButton.innerHTML = type === 'password' ? '<i class="fas fa-eye"></i>' : '<i class="fas fa-eye-slash"></i>';
+    });
+
+    // Handle API key form submission
+    const apiKeyForm = document.getElementById('apiKeyForm');
+    const apiKeyMessage = document.getElementById('apiKeyMessage');
+    
+    apiKeyForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const formData = new FormData(apiKeyForm);
+        const data = {
+            mistral_api_key: formData.get('mistral_api_key')
+        };
+        
+        try {
+            const response = await fetch('/api/settings/update-api-key', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok) {
+                showMessage('API key updated successfully!', 'success');
+            } else {
+                showMessage(result.error || 'Failed to update API key', 'danger');
+            }
+        } catch (error) {
+            showMessage('Network error: ' + error.message, 'danger');
+        }
+    });
+    
+    function showMessage(message, type) {
+        apiKeyMessage.innerHTML = `
+            <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        `;
+        apiKeyMessage.style.display = 'block';
+        
+        // Scroll to message
+        apiKeyMessage.scrollIntoView({ behavior: 'smooth' });
+    }
+});
+</script>
+{% endblock %}

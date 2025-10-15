@@ -1,0 +1,242 @@
+// Main JavaScript file for Expense Tracker
+
+// Utility functions
+const Utils = {
+    // Show loading state
+    showLoading: (element) => {
+        element.classList.add('loading');
+        element.disabled = true;
+    },
+    
+    // Hide loading state
+    hideLoading: (element) => {
+        element.classList.remove('loading');
+        element.disabled = false;
+    },
+    
+    // Show notification
+    showNotification: (message, type = 'info') => {
+        const alert = document.createElement('div');
+        alert.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+        alert.style.cssText = 'top: 20px; right: 20px; z-index: 1050; min-width: 300px;';
+        alert.innerHTML = `
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        document.body.appendChild(alert);
+        
+        // Auto remove after 5 seconds
+        setTimeout(() => {
+            if (alert.parentNode) {
+                alert.parentNode.removeChild(alert);
+            }
+        }, 5000);
+    },
+    
+    // Format currency
+    formatCurrency: (amount) => {
+        return new Intl.NumberFormat('en-US', {
+            style: 'currency',
+            currency: 'USD'
+        }).format(amount);
+    },
+    
+    // Format date
+    formatDate: (date) => {
+        return new Date(date).toLocaleDateString('en-US');
+    },
+    
+    // Debounce function
+    debounce: (func, wait) => {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    },
+    
+    // Validate email
+    isValidEmail: (email) => {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return emailRegex.test(email);
+    },
+    
+    // Generate unique ID
+    generateId: () => {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+};
+
+// API client
+const ApiClient = {
+    // Make API request
+    request: async (url, options = {}) => {
+        const config = {
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            },
+            ...options
+        };
+        
+        if (config.body && typeof config.body === 'object') {
+            config.body = JSON.stringify(config.body);
+        }
+        
+        try {
+            const response = await fetch(url, config);
+            const data = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(data.error || 'Request failed');
+            }
+            
+            return data;
+        } catch (error) {
+            console.error('API request failed:', error);
+            throw error;
+        }
+    },
+    
+    // Dashboard API methods
+    dashboard: {
+        create: (data) => ApiClient.request('/api/dashboard/create', {
+            method: 'POST',
+            body: data
+        }),
+        
+        get: (id) => ApiClient.request(`/api/dashboard/${id}`),
+        
+        update: (id, data) => ApiClient.request(`/api/dashboard/${id}`, {
+            method: 'PUT',
+            body: data
+        }),
+        
+        delete: (id) => ApiClient.request(`/api/dashboard/${id}`, {
+            method: 'DELETE'
+        })
+    },
+    
+    // Settings API methods
+    settings: {
+        updateApiKey: (apiKey) => ApiClient.request('/api/settings/update-api-key', {
+            method: 'POST',
+            body: { mistral_api_key: apiKey }
+        })
+    },
+    
+    // Expenses API methods
+    expenses: {
+        create: (dashboardId, data) => ApiClient.request(`/api/dashboard/${dashboardId}/expenses`, {
+            method: 'POST',
+            body: data
+        }),
+        
+        get: (dashboardId) => ApiClient.request(`/api/dashboard/${dashboardId}/expenses`),
+        
+        update: (dashboardId, expenseId, data) => ApiClient.request(`/api/dashboard/${dashboardId}/expenses/${expenseId}`, {
+            method: 'PUT',
+            body: data
+        }),
+        
+        delete: (dashboardId, expenseId) => ApiClient.request(`/api/dashboard/${dashboardId}/expenses/${expenseId}`, {
+            method: 'DELETE'
+        })
+    },
+    
+    // AI Processing API methods
+    ai: {
+        processCsv: (dashboardId, sessionId, prompt, csvData) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/process`, {
+            method: 'POST',
+            body: { session_id: sessionId, prompt, csv_data: csvData }
+        }),
+        
+        createSession: (dashboardId, csvData) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/session`, {
+            method: 'POST',
+            body: { csv_data: csvData }
+        }),
+        
+        getSession: (dashboardId, sessionId) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/session/${sessionId}`)
+    }
+};
+
+// Initialize when DOM is loaded
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize tooltips
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    const tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+    
+    // Auto-dismiss alerts after 5 seconds
+    const alerts = document.querySelectorAll('.alert');
+    alerts.forEach(alert => {
+        setTimeout(() => {
+            if (alert.parentNode) {
+                const bsAlert = new bootstrap.Alert(alert);
+                bsAlert.close();
+            }
+        }, 5000);
+    });
+    
+    // Add smooth scrolling for anchor links
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function (e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) {
+                target.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+            }
+        });
+    });
+    
+    // Handle file upload drag and drop
+    const fileUploadAreas = document.querySelectorAll('.border-dashed');
+    fileUploadAreas.forEach(area => {
+        area.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            this.style.borderColor = '#0d6efd';
+            this.style.backgroundColor = 'rgba(13, 110, 253, 0.05)';
+        });
+        
+        area.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            this.style.borderColor = '#dee2e6';
+            this.style.backgroundColor = '';
+        });
+        
+        area.addEventListener('drop', function(e) {
+            e.preventDefault();
+            this.style.borderColor = '#dee2e6';
+            this.style.backgroundColor = '';
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const fileInput = this.querySelector('input[type="file"]');
+                if (fileInput) {
+                    // Create a new FileList (can't directly assign to fileInput.files)
+                    const dataTransfer = new DataTransfer();
+                    dataTransfer.items.add(files[0]);
+                    fileInput.files = dataTransfer.files;
+                    
+                    // Trigger change event
+                    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+        });
+    });
+    
+    console.log('Expense Tracker initialized');
+});
+
+// Export for use in other modules
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { Utils, ApiClient };
+}

@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+
+{% block title %}{{ dashboard.name }} - Expense Tracker{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2><i class="fas fa-tachometer-alt me-2"></i>{{ dashboard.name }}</h2>
+        {% if dashboard.description %}
+        <p class="text-muted mb-0">{{ dashboard.description }}</p>
+        {% endif %}
+    </div>
+    <div>
+        <a href="{{ url_for('dashboard_list') }}" class="btn btn-outline-secondary me-2">
+            <i class="fas fa-arrow-left me-1"></i>Back to Dashboards
+        </a>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#shareDashboardModal">
+            <i class="fas fa-share me-1"></i>Share
+        </button>
+    </div>
+</div>
+
+<!-- Dashboard Navigation -->
+<ul class="nav nav-tabs mb-4" id="dashboardTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="ingress-tab" data-bs-toggle="tab" data-bs-target="#ingress" type="button" role="tab">
+            <i class="fas fa-upload me-1"></i>Data Ingress
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="monthly-tab" data-bs-toggle="tab" data-bs-target="#monthly" type="button" role="tab">
+            <i class="fas fa-calendar me-1"></i>Monthly Expenses
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="yearly-tab" data-bs-toggle="tab" data-bs-target="#yearly" type="button" role="tab">
+            <i class="fas fa-chart-line me-1"></i>Yearly Overview
+        </button>
+    </li>
+</ul>
+
+<!-- Tab Content -->
+<div class="tab-content" id="dashboardTabsContent">
+    <!-- Ingress Tab -->
+    <div class="tab-pane fade show active" id="ingress" role="tabpanel">
+        <div class="row">
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0"><i class="fas fa-file-pdf me-2"></i>Upload Bank Statement</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle me-2"></i>
+                            <strong>Security First:</strong> Your bank statements are processed entirely in your browser. 
+                            No sensitive PDF files are uploaded to our servers.
+                        </div>
+                        
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <div id="pdfUploadArea" class="border-dashed p-4 text-center h-100">
+                                    <i class="fas fa-file-pdf fa-3x text-muted mb-3"></i>
+                                    <h5>Upload Bank Statement PDF</h5>
+                                    <p class="text-muted mb-3">Drag and drop your PDF file here or click to browse</p>
+                                    <input type="file" id="pdfFile" accept=".pdf" class="d-none">
+                                    <button type="button" class="btn btn-outline-primary" onclick="document.getElementById('pdfFile').click()">
+                                        <i class="fas fa-folder-open me-1"></i>Choose File
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div id="sheetsUploadArea" class="border-dashed p-4 text-center h-100">
+                                    <i class="fas fa-table fa-3x text-muted mb-3"></i>
+                                    <h5>Paste from Google Sheets</h5>
+                                    <p class="text-muted mb-3">Copy and paste table data from Google Sheets</p>
+                                    <textarea id="sheetsPasteArea" class="form-control mb-3" rows="6" 
+                                              placeholder="Paste your table data here from Google Sheets..."></textarea>
+                                    <button type="button" class="btn btn-outline-success" id="processSheetsData">
+                                        <i class="fas fa-paste me-1"></i>Process Data
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div id="processingArea" class="d-none">
+                            <div class="progress mb-3">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                            </div>
+                            <p class="text-center">Processing PDF... This may take a few moments.</p>
+                        </div>
+                        
+                        <div id="csvPreviewArea" class="d-none">
+                            <h6>Extracted Data Preview</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered" id="csvPreviewTable">
+                                    <!-- CSV preview will be populated here -->
+                                </table>
+                            </div>
+                            
+                            <!-- Editable CSV Table Section -->
+                            <div id="editableCsvSection" class="d-none mt-4">
+                                <h6>Editable Data Table</h6>
+                                <p class="text-muted mb-3">Edit the table directly like Google Sheets. Make your changes and click Save when ready.</p>
+                                <div id="editableCsvTable"></div>
+                                <div class="mt-3">
+                                    <button class="btn btn-success me-2" id="saveExpenses">
+                                        <i class="fas fa-save me-1"></i>Save to Expenses
+                                    </button>
+                                    <button class="btn btn-outline-secondary" id="cancelEdit">
+                                        <i class="fas fa-times me-1"></i>Cancel
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="mt-3">
+                                <button class="btn btn-success me-2" id="startAiProcessing">
+                                    <i class="fas fa-robot me-1"></i>Start AI Processing
+                                </button>
+                                <button class="btn btn-primary me-2" id="saveCsv">
+                                    <i class="fas fa-save me-1"></i>Save Data
+                                </button>
+                                <button class="btn btn-outline-primary" id="editCsv">
+                                    <i class="fas fa-edit me-1"></i>Edit Data
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- AI Chat Interface -->
+                <div class="card mt-4 d-none" id="aiChatCard">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0"><i class="fas fa-robot me-2"></i>AI Assistant</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="chatMessages" class="mb-3" style="max-height: 300px; overflow-y: auto;">
+                            <!-- Chat messages will appear here -->
+                        </div>
+                        <div class="input-group">
+                            <input type="text" id="chatInput" class="form-control" placeholder="Ask AI to filter, categorize, or transform your data...">
+                            <button class="btn btn-success" id="sendMessage">
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                        <div class="mt-2">
+                            <small class="text-muted">Examples: "Filter only transactions above $50", "Categorize expenses", "Remove duplicates"</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-lg-4">
+                <div class="card">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="mb-0"><i class="fas fa-info-circle me-2"></i>How It Works</h5>
+                    </div>
+                    <div class="card-body">
+                        <ol class="list-group list-group-numbered">
+                            <li class="list-group-item border-0 px-0">
+                                <strong>Upload PDF</strong> - Your bank statement is processed locally
+                            </li>
+                            <li class="list-group-item border-0 px-0">
+                                <strong>Extract Data</strong> - Tables are converted to CSV format
+                            </li>
+                            <li class="list-group-item border-0 px-0">
+                                <strong>AI Processing</strong> - Use natural language to transform data
+                            </li>
+                            <li class="list-group-item border-0 px-0">
+                                <strong>Review & Save</strong> - Finalize and add to your dashboard
+                            </li>
+                        </ol>
+                    </div>
+                </div>
+                
+                <div class="card mt-4">
+                    <div class="card-header bg-warning text-dark">
+                        <h5 class="mb-0"><i class="fas fa-users me-2"></i>Dashboard Members</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="list-group list-group-flush">
+                            {% for member in dashboard.members %}
+                            <div class="list-group-item d-flex justify-content-between align-items-center">
+                                <div>
+                                    <img src="{{ member.user.get_profile_picture() }}" alt="{{ member.user.name }}" class="rounded-circle me-2" width="30" height="30">
+                                    {{ member.user.name }}
+                                </div>
+                                <span class="badge bg-{{ 'primary' if member.role == 'owner' else 'secondary' }}">
+                                    {{ member.role }}
+                                </span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Monthly Expenses Tab -->
+    <div class="tab-pane fade" id="monthly" role="tabpanel">
+        <div class="alert alert-info mb-4">
+            <i class="fas fa-info-circle me-2"></i>
+            Interactive expense table - edit directly like Google Sheets. Changes are saved automatically.
+        </div>
+        
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="fas fa-table me-2"></i>Monthly Expenses</h5>
+                        <div class="dropdown">
+                            <button class="btn btn-sm btn-outline-light dropdown-toggle" type="button" id="monthDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="fas fa-calendar me-1"></i>Select Month
+                            </button>
+                            <ul class="dropdown-menu" id="monthDropdownMenu" aria-labelledby="monthDropdown">
+                                <!-- Month options will be populated here -->
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="monthlyExpensesTable" class="table-responsive">
+                            <!-- Handsontable will be initialized here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Category Breakdown</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="categoryPivotTable">
+                            <!-- Pivot table will be populated here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Yearly Overview Tab -->
+    <div class="tab-pane fade" id="yearly" role="tabpanel">
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0"><i class="fas fa-chart-line me-2"></i>Yearly Expense Summary</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle me-2"></i>
+                            Yearly overview showing aggregated expense data across all months.
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-striped" id="yearlyTable">
+                                <!-- Yearly data will be populated here -->
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Share Dashboard Modal -->
+<div class="modal fade" id="shareDashboardModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Share Dashboard</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted">Share this dashboard with other users by entering their email addresses.</p>
+                <div class="mb-3">
+                    <label for="shareEmail" class="form-label">Email Address</label>
+                    <input type="email" class="form-control" id="shareEmail" placeholder="Enter email address">
+                </div>
+                <button class="btn btn-primary w-100" id="inviteUser">
+                    <i class="fas fa-envelope me-1"></i>Send Invitation
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+.border-dashed {
+    border: 2px dashed #dee2e6;
+    border-radius: 0.375rem;
+    transition: border-color 0.15s ease-in-out;
+}
+.border-dashed:hover {
+    border-color: #0d6efd;
+}
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<!-- jQuery (required for DataTables) -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<!-- PDF.js library -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+<!-- Handsontable for interactive tables -->
+<script src="https://cdn.jsdelivr.net/npm/handsontable/dist/handsontable.full.min.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/handsontable/dist/handsontable.full.min.css" rel="stylesheet">
+<!-- DataTables for yearly view -->
+<script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
+<link href="https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css" rel="stylesheet">
+
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

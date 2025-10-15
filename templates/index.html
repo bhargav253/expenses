@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}Home - Expense Tracker{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 text-center">
+        <div class="hero-section py-5">
+            <h1 class="display-4 fw-bold text-primary mb-4">
+                <i class="fas fa-chart-pie me-3"></i>Expense Tracker
+            </h1>
+            <p class="lead text-muted mb-4">
+                Track, analyze, and manage your expenses with AI-powered insights. 
+                Collaborate with others and gain full control over your financial data.
+            </p>
+            
+            {% if not session.user %}
+            <div class="mt-5">
+                <a href="{{ url_for('register') }}" class="btn btn-primary btn-lg me-3 mb-2">
+                    <i class="fas fa-user-plus me-2"></i>Sign Up
+                </a>
+                <a href="{{ url_for('login') }}" class="btn btn-outline-primary btn-lg me-3 mb-2">
+                    <i class="fas fa-sign-in-alt me-2"></i>Login
+                </a>
+                <a href="{{ url_for('google_login') }}" class="btn btn-outline-secondary btn-lg mb-2">
+                    <i class="fab fa-google me-2"></i>Google
+                </a>
+                <div class="mt-3">
+                    <a href="#features" class="btn btn-link text-white">
+                        <i class="fas fa-info-circle me-2"></i>Learn More
+                    </a>
+                </div>
+            </div>
+            {% else %}
+            <div class="mt-5">
+                <a href="{{ url_for('dashboard_list') }}" class="btn btn-primary btn-lg me-3">
+                    <i class="fas fa-tachometer-alt me-2"></i>View Dashboards
+                </a>
+                <a href="{{ url_for('settings') }}" class="btn btn-outline-primary btn-lg">
+                    <i class="fas fa-cog me-2"></i>Settings
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div id="features" class="row mt-5">
+    <div class="col-md-4 mb-4">
+        <div class="card h-100 border-0 shadow-sm">
+            <div class="card-body text-center">
+                <div class="feature-icon mb-3">
+                    <i class="fas fa-file-pdf fa-3x text-primary"></i>
+                </div>
+                <h4 class="card-title">Secure PDF Processing</h4>
+                <p class="card-text text-muted">
+                    Upload bank statements securely. All PDF processing happens in your browser - 
+                    sensitive documents never leave your device.
+                </p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4 mb-4">
+        <div class="card h-100 border-0 shadow-sm">
+            <div class="card-body text-center">
+                <div class="feature-icon mb-3">
+                    <i class="fas fa-robot fa-3x text-primary"></i>
+                </div>
+                <h4 class="card-title">AI-Powered Analysis</h4>
+                <p class="card-text text-muted">
+                    Use natural language to filter and categorize expenses. 
+                    Chat with AI to transform your data exactly how you want it.
+                </p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4 mb-4">
+        <div class="card h-100 border-0 shadow-sm">
+            <div class="card-body text-center">
+                <div class="feature-icon mb-3">
+                    <i class="fas fa-users fa-3x text-primary"></i>
+                </div>
+                <h4 class="card-title">Collaborative Dashboards</h4>
+                <p class="card-text text-muted">
+                    Share expense tracking with family, roommates, or team members. 
+                    Everyone stays on the same page with real-time updates.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-5">
+    <div class="col-md-6 mb-4">
+        <div class="card h-100 border-0 shadow-sm">
+            <div class="card-body text-center">
+                <div class="feature-icon mb-3">
+                    <i class="fas fa-table fa-3x text-primary"></i>
+                </div>
+                <h4 class="card-title">Google Sheets-like Editing</h4>
+                <p class="card-text text-muted">
+                    Edit your expense data with familiar spreadsheet controls. 
+                    Add, remove, and modify rows and columns with ease.
+                </p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6 mb-4">
+        <div class="card h-100 border-0 shadow-sm">
+            <div class="card-body text-center">
+                <div class="feature-icon mb-3">
+                    <i class="fas fa-chart-bar fa-3x text-primary"></i>
+                </div>
+                <h4 class="card-title">Smart Analytics</h4>
+                <p class="card-text text-muted">
+                    Automatic categorization, pivot tables, and monthly/yearly views 
+                    help you understand your spending patterns.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

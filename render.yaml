@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: expense-tracker
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        value: your-google-client-id-here
+      - key: GOOGLE_CLIENT_SECRET
+        value: your-google-client-secret-here

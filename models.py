@@ -1,0 +1,141 @@
+from extensions import db
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
+import json
+
+# Predefined expense categories
+EXPENSE_CATEGORIES = [
+    'car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 
+    'hospital', 'misc', 'rent', 'mortgage', 'restaurants', 
+    'service', 'shopping', 'transport', 'utilities', 'vacation'
+]
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    google_id = db.Column(db.String(255), unique=True, nullable=True)
+    email = db.Column(db.String(255), unique=True, nullable=False)
+    username = db.Column(db.String(255), unique=True, nullable=True)
+    name = db.Column(db.String(255), nullable=False)
+    profile_picture = db.Column(db.String(500))
+    password_hash = db.Column(db.String(255))
+    mistral_api_key = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    dashboards = db.relationship('DashboardMember', back_populates='user')
+    expenses = db.relationship('Expense', back_populates='user')
+    
+    def set_password(self, password):
+        """Set password hash"""
+        self.password_hash = generate_password_hash(password)
+    
+    def check_password(self, password):
+        """Check password hash"""
+        return check_password_hash(self.password_hash, password)
+    
+    def get_profile_picture(self):
+        """Get profile picture URL, generate default if not set"""
+        if self.profile_picture:
+            return self.profile_picture
+        # Generate default avatar using DiceBear API
+        seed = self.username or self.email.split('@')[0] or str(self.id)
+        return f'https://api.dicebear.com/7.x/avataaars/svg?seed={seed}&backgroundColor=b6e3f4,c0aede,d1d4f9'
+
+class Dashboard(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    members = db.relationship('DashboardMember', back_populates='dashboard')
+    expenses = db.relationship('Expense', back_populates='dashboard')
+
+class DashboardMember(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    role = db.Column(db.String(50), default='member')  # 'owner', 'member'
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    dashboard = db.relationship('Dashboard', back_populates='members')
+    user = db.relationship('User', back_populates='dashboards')
+
+class Expense(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    date = db.Column(db.Date, nullable=False)
+    description = db.Column(db.String(500), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    category = db.Column(db.String(100), nullable=False)
+    tags = db.Column(db.Text)  # JSON string for additional tags
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    dashboard = db.relationship('Dashboard', back_populates='expenses')
+    user = db.relationship('User', back_populates='expenses')
+
+class Category(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+    description = db.Column(db.Text)
+    color = db.Column(db.String(7))  # Hex color code
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class UploadedFile(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)
+    file_type = db.Column(db.String(50))  # 'csv', 'processed_csv'
+    file_size = db.Column(db.Integer)
+    storage_path = db.Column(db.String(500))  # Path in Google Cloud Storage
+    processed_data = db.Column(db.Text)  # JSON string of processed data
+    status = db.Column(db.String(50), default='uploaded')  # 'uploaded', 'processing', 'completed', 'error'
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    dashboard = db.relationship('Dashboard')
+    user = db.relationship('User')
+
+class ChatSession(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    session_id = db.Column(db.String(255), unique=True, nullable=False)
+    original_csv_data = db.Column(db.Text)  # Original CSV content
+    current_csv_data = db.Column(db.Text)  # Current processed CSV content
+    conversation_history = db.Column(db.Text)  # JSON string of chat messages
+    status = db.Column(db.String(50), default='active')  # 'active', 'completed', 'archived'
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    dashboard = db.relationship('Dashboard')
+    user = db.relationship('User')
+    
+    def get_conversation_history(self):
+        """Get conversation history as Python list"""
+        if self.conversation_history:
+            return json.loads(self.conversation_history)
+        return []
+    
+    def add_message(self, role, content):
+        """Add a message to conversation history"""
+        history = self.get_conversation_history()
+        history.append({
+            'role': role,
+            'content': content,
+            'timestamp': datetime.utcnow().isoformat()
+        })
+        self.conversation_history = json.dumps(history)
+    
+    def get_csv_data(self):
+        """Get current CSV data"""
+        return self.current_csv_data or self.original_csv_data
