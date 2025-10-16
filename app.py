@@ -34,7 +34,7 @@ google = oauth.register(
 )
 
 # Import models
-from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession
+from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings
 
 # Initialize database tables
 def init_db():
@@ -166,7 +166,15 @@ def dashboard_list():
     user_dashboards = DashboardMember.query.filter_by(user_id=user_id).all()
     dashboards = [member.dashboard for member in user_dashboards]
     
-    return render_template('dashboard_list.html', dashboards=dashboards)
+    # Get pending invitations for the current user
+    pending_invitations = DashboardInvitation.query.filter_by(
+        invited_user_id=user_id,
+        status='pending'
+    ).all()
+    
+    return render_template('dashboard_list.html', 
+                         dashboards=dashboards, 
+                         pending_invitations=pending_invitations)
 
 @app.route('/settings')
 def settings():
@@ -223,6 +231,54 @@ def create_dashboard():
         'message': 'Dashboard created successfully',
         'dashboard_id': dashboard.id
     })
+
+@app.route('/api/dashboard/<int:dashboard_id>', methods=['DELETE'])
+def delete_dashboard(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    user_id = session['user_id']
+    
+    # Check if user is the owner of this dashboard
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=user_id,
+        role='owner'
+    ).first()
+    
+    if not member:
+        return jsonify({'error': 'Only dashboard owners can delete dashboards'}), 403
+    
+    try:
+        # Get the dashboard
+        dashboard = Dashboard.query.get(dashboard_id)
+        if not dashboard:
+            return jsonify({'error': 'Dashboard not found'}), 404
+        
+        # Delete all related data first (to maintain referential integrity)
+        # Delete expenses
+        Expense.query.filter_by(dashboard_id=dashboard_id).delete()
+        
+        # Delete uploaded files
+        UploadedFile.query.filter_by(dashboard_id=dashboard_id).delete()
+        
+        # Delete chat sessions
+        ChatSession.query.filter_by(dashboard_id=dashboard_id).delete()
+        
+        # Delete dashboard members
+        DashboardMember.query.filter_by(dashboard_id=dashboard_id).delete()
+        
+        # Finally delete the dashboard
+        db.session.delete(dashboard)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Dashboard deleted successfully'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to delete dashboard: {str(e)}'}), 500
 
 @app.route('/dashboard/<int:dashboard_id>')
 def dashboard_view(dashboard_id):
@@ -364,7 +420,7 @@ def call_mistral_api(api_key, prompt, csv_data):
     4. Provide a brief explanation of what you did
     
     Always return valid CSV format. Keep the same column structure unless explicitly requested to change it.
-    For categorization, use these categories: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurants, service, shopping, transport, utilities, vacation.
+    For categorization, use these categories: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation.
     
     Example responses:
     - "I've filtered the data to show only transactions above $50. Here's the processed CSV:"
@@ -408,6 +464,264 @@ def call_mistral_api(api_key, prompt, csv_data):
     
     return processed_csv, ai_response
 
+# Dashboard Members Endpoint
+@app.route('/api/dashboard/<int:dashboard_id>/members', methods=['GET'])
+def get_dashboard_members(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    members = DashboardMember.query.filter_by(dashboard_id=dashboard_id).all()
+    member_data = []
+    
+    for member in members:
+        member_data.append({
+            'user': {
+                'id': member.user.id,
+                'name': member.user.name,
+                'email': member.user.email
+            },
+            'role': member.role
+        })
+    
+    return jsonify(member_data)
+
+# Dashboard Invitation Endpoints
+@app.route('/api/dashboard/<int:dashboard_id>/invite', methods=['POST'])
+def invite_to_dashboard(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    user_id = session['user_id']
+    
+    # Check if user is owner of this dashboard
+    owner_member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=user_id,
+        role='owner'
+    ).first()
+    
+    if not owner_member:
+        return jsonify({'error': 'Only dashboard owners can invite users'}), 403
+    
+    data = request.get_json()
+    invited_email = data.get('email')
+    message = data.get('message', '')
+    
+    if not invited_email:
+        return jsonify({'error': 'Email is required'}), 400
+    
+    # Find user by email
+    invited_user = User.query.filter_by(email=invited_email).first()
+    if not invited_user:
+        return jsonify({'error': 'User with this email not found'}), 404
+    
+    # Check if user is already a member
+    existing_member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id,
+        user_id=invited_user.id
+    ).first()
+    
+    if existing_member:
+        return jsonify({'error': 'User is already a member of this dashboard'}), 400
+    
+    # Check if there's already a pending invitation
+    existing_invitation = DashboardInvitation.query.filter_by(
+        dashboard_id=dashboard_id,
+        invited_user_id=invited_user.id,
+        status='pending'
+    ).first()
+    
+    if existing_invitation:
+        return jsonify({'error': 'User already has a pending invitation'}), 400
+    
+    # Create invitation
+    invitation = DashboardInvitation(
+        dashboard_id=dashboard_id,
+        invited_user_id=invited_user.id,
+        invited_by_user_id=user_id,
+        message=message
+    )
+    
+    db.session.add(invitation)
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'Invitation sent successfully',
+        'invitation_id': invitation.id
+    })
+
+@app.route('/api/dashboard/invitations', methods=['GET'])
+def get_user_invitations():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    user_id = session['user_id']
+    
+    # Get pending invitations for the current user
+    invitations = DashboardInvitation.query.filter_by(
+        invited_user_id=user_id,
+        status='pending'
+    ).all()
+    
+    invitation_data = []
+    for invitation in invitations:
+        invitation_data.append({
+            'id': invitation.id,
+            'dashboard': {
+                'id': invitation.dashboard.id,
+                'name': invitation.dashboard.name,
+                'description': invitation.dashboard.description
+            },
+            'invited_by': {
+                'id': invitation.invited_by_user.id,
+                'name': invitation.invited_by_user.name,
+                'email': invitation.invited_by_user.email
+            },
+            'message': invitation.message,
+            'created_at': invitation.created_at.isoformat()
+        })
+    
+    return jsonify(invitation_data)
+
+@app.route('/api/dashboard/invitations/<int:invitation_id>/respond', methods=['POST'])
+def respond_to_invitation(invitation_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    user_id = session['user_id']
+    
+    # Get invitation
+    invitation = DashboardInvitation.query.filter_by(
+        id=invitation_id,
+        invited_user_id=user_id,
+        status='pending'
+    ).first()
+    
+    if not invitation:
+        return jsonify({'error': 'Invitation not found or already processed'}), 404
+    
+    data = request.get_json()
+    action = data.get('action')  # 'accept' or 'reject'
+    
+    if action not in ['accept', 'reject']:
+        return jsonify({'error': 'Invalid action. Use "accept" or "reject"'}), 400
+    
+    if action == 'accept':
+        # Add user as member
+        member = DashboardMember(
+            dashboard_id=invitation.dashboard_id,
+            user_id=user_id,
+            role='member'
+        )
+        db.session.add(member)
+        
+        # Create default user settings
+        settings = UserDashboardSettings(
+            user_id=user_id,
+            dashboard_id=invitation.dashboard_id,
+            edit_mode='private'  # Default to private mode
+        )
+        db.session.add(settings)
+        
+        invitation.status = 'accepted'
+        
+        message = 'Invitation accepted successfully'
+    else:
+        invitation.status = 'rejected'
+        message = 'Invitation rejected'
+    
+    db.session.commit()
+    
+    return jsonify({'message': message})
+
+# User Dashboard Settings Endpoints
+@app.route('/api/dashboard/<int:dashboard_id>/settings', methods=['GET'])
+def get_dashboard_settings(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    user_id = session['user_id']
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=user_id
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    # Get or create settings
+    settings = UserDashboardSettings.query.filter_by(
+        user_id=user_id,
+        dashboard_id=dashboard_id
+    ).first()
+    
+    if not settings:
+        # Create default settings
+        settings = UserDashboardSettings(
+            user_id=user_id,
+            dashboard_id=dashboard_id,
+            edit_mode='private'
+        )
+        db.session.add(settings)
+        db.session.commit()
+    
+    return jsonify({
+        'edit_mode': settings.edit_mode
+    })
+
+@app.route('/api/dashboard/<int:dashboard_id>/settings', methods=['PUT'])
+def update_dashboard_settings(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    user_id = session['user_id']
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=user_id
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    edit_mode = data.get('edit_mode')
+    
+    if edit_mode not in ['private', 'public']:
+        return jsonify({'error': 'Invalid edit mode. Use "private" or "public"'}), 400
+    
+    # Get or create settings
+    settings = UserDashboardSettings.query.filter_by(
+        user_id=user_id,
+        dashboard_id=dashboard_id
+    ).first()
+    
+    if not settings:
+        settings = UserDashboardSettings(
+            user_id=user_id,
+            dashboard_id=dashboard_id,
+            edit_mode=edit_mode
+        )
+        db.session.add(settings)
+    else:
+        settings.edit_mode = edit_mode
+    
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'Settings updated successfully',
+        'edit_mode': settings.edit_mode
+    })
+
 # Expense Management Endpoints
 @app.route('/api/dashboard/<int:dashboard_id>/expenses', methods=['GET'])
 def get_expenses(dashboard_id):
@@ -432,7 +746,8 @@ def get_expenses(dashboard_id):
             'description': expense.description,
             'amount': expense.amount,
             'category': expense.category,
-            'user_name': expense.user.name
+            'user_name': expense.user.name,
+            'user_id': expense.user_id
         })
     
     return jsonify(expense_data)
@@ -515,10 +830,12 @@ def update_expense(dashboard_id, expense_id):
     if 'user_id' not in session:
         return jsonify({'error': 'Not authenticated'}), 401
     
+    user_id = session['user_id']
+    
     # Check dashboard access
     member = DashboardMember.query.filter_by(
         dashboard_id=dashboard_id, 
-        user_id=session['user_id']
+        user_id=user_id
     ).first()
     if not member:
         return jsonify({'error': 'Access denied'}), 403
@@ -531,6 +848,27 @@ def update_expense(dashboard_id, expense_id):
     
     if not expense:
         return jsonify({'error': 'Expense not found'}), 404
+    
+    # Check edit permissions - we need to check the edit mode of the expense owner
+    expense_owner_settings = UserDashboardSettings.query.filter_by(
+        user_id=expense.user_id,
+        dashboard_id=dashboard_id
+    ).first()
+    
+    # If no settings exist for the expense owner, create default private mode
+    if not expense_owner_settings:
+        expense_owner_settings = UserDashboardSettings(
+            user_id=expense.user_id,
+            dashboard_id=dashboard_id,
+            edit_mode='private'
+        )
+        db.session.add(expense_owner_settings)
+        db.session.commit()
+    
+    # Check if user can edit this expense
+    # If expense owner has private mode, only they can edit their own expenses
+    if expense_owner_settings.edit_mode == 'private' and expense.user_id != user_id:
+        return jsonify({'error': 'This user has private mode enabled. You can only edit your own expenses.'}), 403
     
     data = request.get_json()
     
@@ -568,10 +906,12 @@ def delete_expense(dashboard_id, expense_id):
     if 'user_id' not in session:
         return jsonify({'error': 'Not authenticated'}), 401
     
+    user_id = session['user_id']
+    
     # Check dashboard access
     member = DashboardMember.query.filter_by(
         dashboard_id=dashboard_id, 
-        user_id=session['user_id']
+        user_id=user_id
     ).first()
     if not member:
         return jsonify({'error': 'Access denied'}), 403
@@ -585,6 +925,27 @@ def delete_expense(dashboard_id, expense_id):
         
         if not expense:
             return jsonify({'error': 'Expense not found'}), 404
+        
+        # Check edit permissions - we need to check the edit mode of the expense owner
+        expense_owner_settings = UserDashboardSettings.query.filter_by(
+            user_id=expense.user_id,
+            dashboard_id=dashboard_id
+        ).first()
+        
+        # If no settings exist for the expense owner, create default private mode
+        if not expense_owner_settings:
+            expense_owner_settings = UserDashboardSettings(
+                user_id=expense.user_id,
+                dashboard_id=dashboard_id,
+                edit_mode='private'
+            )
+            db.session.add(expense_owner_settings)
+            db.session.commit()
+        
+        # Check if user can delete this expense
+        # If expense owner has private mode, only they can delete their own expenses
+        if expense_owner_settings.edit_mode == 'private' and expense.user_id != user_id:
+            return jsonify({'error': 'This user has private mode enabled. You can only delete your own expenses.'}), 403
         
         # Delete the expense
         db.session.delete(expense)

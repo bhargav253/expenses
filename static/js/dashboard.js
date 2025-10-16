@@ -54,6 +54,9 @@ class DashboardManager {
         // Setup month dropdown first and get the selected month
         const selectedMonth = await this.setupMonthDropdown();
         
+        // Setup user dropdown
+        await this.setupUserDropdown();
+        
         // Initialize Handsontable for monthly expenses with the selected month
         this.initMonthlyTable(selectedMonth);
         
@@ -478,10 +481,14 @@ class DashboardManager {
         const headers = this.editableCsvTable.getColHeader();
         
         try {
+            // Define valid categories
+            const validCategories = ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurant', 'service', 'shopping', 'transport', 'utility', 'vacation'];
+            
             // Convert table data to expense objects
             const expenses = [];
+            const invalidCategories = [];
             
-            data.forEach(row => {
+            data.forEach((row, index) => {
                 if (row.length >= 4) {
                     // Parse date from MM/DD/YYYY format to YYYY-MM-DD format
                     let date = row[0];
@@ -502,12 +509,33 @@ class DashboardManager {
                         category: row[3] || 'misc'
                     };
                     
+                    // Validate category
+                    if (expense.category && !validCategories.includes(expense.category.toLowerCase())) {
+                        invalidCategories.push({
+                            row: index + 2, // +2 because of header row and 0-based index
+                            category: expense.category,
+                            description: expense.description
+                        });
+                        return; // Skip this expense
+                    }
+                    
                     // Only add if we have valid data
                     if (expense.date && expense.description && expense.amount > 0) {
                         expenses.push(expense);
                     }
                 }
             });
+            
+            // Show error if invalid categories found
+            if (invalidCategories.length > 0) {
+                const errorMessage = `Invalid categories found in ${invalidCategories.length} row(s). Please fix these before saving:\n\n` +
+                    invalidCategories.map(item => 
+                        `Row ${item.row}: "${item.category}" (Description: "${item.description}")`
+                    ).join('\n');
+                
+                Utils.showNotification(errorMessage, 'danger', 10000); // Show for 10 seconds
+                return;
+            }
             
             if (expenses.length === 0) {
                 Utils.showNotification('No valid expenses to save', 'warning');
@@ -545,6 +573,9 @@ class DashboardManager {
     
     async saveCsvDataDirectly(csvData) {
         try {
+            // Define valid categories
+            const validCategories = ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurant', 'service', 'shopping', 'transport', 'utility', 'vacation'];
+            
             // Parse CSV data directly
             const rows = csvData.split('\n');
             const headers = rows[0].split(',').map(h => h.replace(/^"|"$/g, ''));
@@ -555,8 +586,9 @@ class DashboardManager {
             
             // Convert to expense objects
             const expenses = [];
+            const invalidCategories = [];
             
-            dataRows.forEach(row => {
+            dataRows.forEach((row, index) => {
                 if (row.length >= 3) {
                     // Parse date from MM/DD/YYYY format to YYYY-MM-DD format
                     let date = row[0];
@@ -577,12 +609,33 @@ class DashboardManager {
                         category: row[3] || 'misc'
                     };
                     
+                    // Validate category
+                    if (expense.category && !validCategories.includes(expense.category.toLowerCase())) {
+                        invalidCategories.push({
+                            row: index + 2, // +2 because of header row and 0-based index
+                            category: expense.category,
+                            description: expense.description
+                        });
+                        return; // Skip this expense
+                    }
+                    
                     // More lenient validation - only require description and amount
                     if (expense.description && expense.amount > 0) {
                         expenses.push(expense);
                     }
                 }
             });
+            
+            // Show error if invalid categories found
+            if (invalidCategories.length > 0) {
+                const errorMessage = `Invalid categories found in ${invalidCategories.length} row(s). Please fix these before saving:\n\n` +
+                    invalidCategories.map(item => 
+                        `Row ${item.row}: "${item.category}" (Description: "${item.description}")`
+                    ).join('\n');
+                
+                Utils.showNotification(errorMessage, 'danger', 10000); // Show for 10 seconds
+                return;
+            }
             
             if (expenses.length === 0) {
                 Utils.showNotification('No valid expenses to save. Please check if your data has descriptions and amounts.', 'warning');
@@ -702,7 +755,7 @@ class DashboardManager {
                 {
                     data: 'category',
                     type: 'dropdown',
-                    source: ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurants', 'service', 'shopping', 'transport', 'utilities', 'vacation'],
+                    source: ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurant', 'service', 'shopping', 'transport', 'utility', 'vacation'],
                     width: 120,
                     filter: 'select'
                 },
@@ -720,13 +773,19 @@ class DashboardManager {
                     filter: 'text'
                 },
                 {
+                    data: 'user_name',
+                    type: 'text',
+                    readOnly: true,
+                    width: 120
+                },
+                {
                     data: 'id',
                     type: 'numeric',
                     readOnly: true,
                     width: 80
                 }
             ],
-            colHeaders: ['Date', 'Category', 'Amount', 'Description', 'ID'],
+            colHeaders: ['Date', 'Category', 'Amount', 'Description', 'User', 'ID'],
             dropdownMenu: [
                 'filter_by_condition',
                 'filter_action_bar',
@@ -782,15 +841,15 @@ class DashboardManager {
                     changes.forEach(change => {
                         const [row, prop, oldValue, newValue] = change;
                         const rowData = this.monthlyTable.getDataAtRow(row);
-                        const rowId = rowData[0]; // ID is in first column
+                        const rowId = rowData[rowData.length - 1]; // ID is in last column
                         
                         if (rowId) {
                             // Convert row data to object format
                             const expenseData = {
-                                date: rowData[1],
-                                description: rowData[2],
-                                amount: rowData[3],
-                                category: rowData[4]
+                                date: rowData[0],
+                                description: rowData[3],
+                                amount: rowData[2],
+                                category: rowData[1]
                             };
                             
                             console.log('Calling updateMonthlyChanges for row ID:', rowId, 'with data:', expenseData);
@@ -893,6 +952,126 @@ class DashboardManager {
     }
 
 
+    async setupUserDropdown() {
+        console.log('=== setupUserDropdown() called ===');
+        const dropdownMenu = document.getElementById('userDropdownMenu');
+        const dropdownButton = document.getElementById('userDropdown');
+        
+        if (!dropdownMenu || !dropdownButton) {
+            console.error('User dropdown elements not found!');
+            return;
+        }
+        
+        try {
+            console.log('Setting up user dropdown from dashboard members...');
+            const users = await this.getDashboardUsers();
+            console.log('Dashboard users:', users);
+            
+            let menuHtml = '';
+            
+            // Add "All Users" option
+            menuHtml += `
+                <li><a class="dropdown-item active" href="#" data-user-id="all">All Users</a></li>
+                <li><hr class="dropdown-divider"></li>
+            `;
+            
+            // Populate dropdown with dashboard users
+            users.forEach(user => {
+                menuHtml += `
+                    <li><a class="dropdown-item" href="#" data-user-id="${user.id}">${user.name}</a></li>
+                `;
+            });
+            
+            dropdownMenu.innerHTML = menuHtml;
+            
+            // Add event listeners to dropdown items
+            const dropdownItems = dropdownMenu.querySelectorAll('.dropdown-item');
+            dropdownItems.forEach(item => {
+                item.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    
+                    // Remove active class from all items
+                    dropdownItems.forEach(i => i.classList.remove('active'));
+                    // Add active class to clicked item
+                    e.target.classList.add('active');
+                    
+                    const selectedUserId = e.target.getAttribute('data-user-id');
+                    const selectedUserName = e.target.textContent;
+                    console.log('User selected from dropdown:', selectedUserId, selectedUserName);
+                    
+                    this.handleUserChange(selectedUserId);
+                    dropdownButton.innerHTML = `<i class="fas fa-user me-1"></i>${selectedUserName}`;
+                });
+            });
+            
+        } catch (error) {
+            console.error('Error setting up user dropdown:', error);
+            // On error, keep dropdown with default option
+            dropdownMenu.innerHTML = '<li><a class="dropdown-item active" href="#" data-user-id="all">All Users</a></li>';
+        }
+    }
+
+    async getDashboardUsers() {
+        try {
+            // Fetch dashboard members from the API
+            const response = await fetch(`/api/dashboard/${this.dashboardId}/members`);
+            if (!response.ok) {
+                throw new Error('Failed to fetch dashboard members');
+            }
+            
+            const members = await response.json();
+            console.log('Dashboard members from API:', members);
+            
+            // Extract unique users from members
+            const users = [];
+            const seenUserIds = new Set();
+            
+            members.forEach(member => {
+                if (member.user && !seenUserIds.has(member.user.id)) {
+                    users.push({
+                        id: member.user.id,
+                        name: member.user.name
+                    });
+                    seenUserIds.add(member.user.id);
+                }
+            });
+            
+            console.log('Unique users:', users);
+            return users;
+            
+        } catch (error) {
+            console.error('Error getting dashboard users:', error);
+            // Fallback: return current user only
+            return [{
+                id: window.currentUserId || 1,
+                name: window.currentUserName || 'Current User'
+            }];
+        }
+    }
+
+    getSelectedUserIdFromDropdown() {
+        const dropdownButton = document.getElementById('userDropdown');
+        if (!dropdownButton) return 'all';
+        
+        // Extract user ID from dropdown button text
+        const buttonText = dropdownButton.textContent.trim();
+        const activeItem = document.querySelector('#userDropdownMenu .dropdown-item.active');
+        
+        if (activeItem) {
+            return activeItem.getAttribute('data-user-id') || 'all';
+        }
+        
+        return 'all';
+    }
+
+    handleUserChange(selectedUserId) {
+        console.log('Selected user:', selectedUserId);
+        // Refresh the table with the selected user filter
+        const selectedMonth = this.getSelectedMonthFromDropdown();
+        this.refreshMonthlyData(selectedMonth, selectedUserId);
+        Utils.showNotification(`Showing data for ${selectedUserId === 'all' ? 'all users' : 'selected user'}`, 'info');
+    }
+
     async getAvailableMonthsFromDb() {
         try {
             console.log('Fetching expenses from API for dashboard:', this.dashboardId);
@@ -976,45 +1155,57 @@ class DashboardManager {
                 return;
             }
             
-            // Get current expenses for the selected month
-            const currentExpenses = await ApiClient.expenses.get(this.dashboardId);
-            const monthExpenses = currentExpenses.filter(expense => {
-                const expenseMonth = expense.date.substring(0, 7);
-                return expenseMonth === selectedMonth;
-            });
-            
             // Get the row index that was removed
             const removedRowIndex = selection[0].start.row;
             console.log('Removing row at index:', removedRowIndex);
             
-            // Find the expense at that position
-            if (removedRowIndex < monthExpenses.length) {
-                const expenseToDelete = monthExpenses[removedRowIndex];
-                if (expenseToDelete && expenseToDelete.id) {
-                    console.log('Deleting expense:', expenseToDelete);
-                    await ApiClient.expenses.delete(this.dashboardId, expenseToDelete.id);
+            // Get the expense ID directly from the Handsontable data
+            if (this.monthlyTable) {
+                const rowData = this.monthlyTable.getDataAtRow(removedRowIndex);
+                console.log('Row data at index', removedRowIndex, ':', rowData);
+                
+                // The expense ID should be in the last column (use -1 indexing like Python)
+                const expenseId = rowData[rowData.length - 1];
+                console.log('Expense ID from table (last column):', expenseId);
+                
+                if (expenseId) {
+                    console.log('Deleting expense with ID:', expenseId);
+                    await ApiClient.expenses.delete(this.dashboardId, expenseId);
                     Utils.showNotification('Expense deleted successfully', 'success');
                     
                     // Remove the row from the table directly without full refresh
-                    // This prevents the afterChange event from firing with loadData source
-                    if (this.monthlyTable) {
-                        this.monthlyTable.alter('remove_row', removedRowIndex);
-                        
-                        // Update category breakdown from current table data
-                        const currentTableData = this.monthlyTable.getData();
-                        this.updateCategoryBreakdownFromTableData(currentTableData);
-                    }
+                    this.monthlyTable.alter('remove_row', removedRowIndex);
+                    
+                    // Update category breakdown from current table data
+                    const currentTableData = this.monthlyTable.getData();
+                    console.log('=== DEBUG: Current table data after row removal ===');
+                    console.log('Number of rows:', currentTableData.length);
+                    console.log('Expense IDs in table:', currentTableData.map(row => row[row.length - 1]));
+                    console.log('Table data structure:', currentTableData);
+                    this.updateCategoryBreakdownFromTableData(currentTableData);
+
+                    // Refresh yearly table to reflect the changes
+                    await this.initYearlyTable();
+                } else {
+                    console.error('No expense ID found in row data');
+                    Utils.showNotification('Error: Could not find expense ID', 'danger');
                 }
             }
         } catch (error) {
             console.error('Error handling row removal:', error);
-            Utils.showNotification('Error deleting expense', 'danger');
+            
+            // Handle 403 Forbidden errors specifically
+            if (error.status === 403) {
+                Utils.showNotification(error.message || 'You do not have permission to delete this expense', 'danger');
+            } else {
+                Utils.showNotification('Error deleting expense: ' + error.message, 'danger');
+            }
         }
     }
 
-    async refreshMonthlyData(month = null) {
+    async refreshMonthlyData(month = null, userId = null) {
         try {
-            console.log('refreshMonthlyData called with month:', month);
+            console.log('refreshMonthlyData called with month:', month, 'and user:', userId);
             const expenses = await ApiClient.expenses.get(this.dashboardId);
             console.log('Fetched expenses from API:', expenses);
             
@@ -1024,12 +1215,19 @@ class DashboardManager {
                 console.log('Filtering for month:', month);
                 filteredExpenses = expenses.filter(expense => {
                     const expenseMonth = expense.date.substring(0, 7); // YYYY-MM
-                    //console.log('Checking expense date:', expense.date, 'month:', expenseMonth, 'matches:', expenseMonth === month);
                     return expenseMonth === month;
                 });
             }
             
-            console.log('Filtered expenses for month', month, ':', filteredExpenses);
+            // Filter by user if specified (not "all")
+            if (userId && userId !== 'all') {
+                console.log('Filtering for user:', userId);
+                filteredExpenses = filteredExpenses.filter(expense => {
+                    return expense.user_id == userId;
+                });
+            }
+            
+            console.log('Filtered expenses for month', month, 'and user', userId, ':', filteredExpenses);
             
             // Update Handsontable with new data
             if (this.monthlyTable) {
@@ -1039,7 +1237,8 @@ class DashboardManager {
                     date: expense.date,
                     description: expense.description,
                     amount: expense.amount,
-                    category: expense.category
+                    category: expense.category,
+                    user_name: expense.user_name
                 }));
                 console.log('Loading table data into Handsontable:', tableData);
                 this.monthlyTable.loadData(tableData);
@@ -1100,20 +1299,36 @@ class DashboardManager {
         const pivotContainer = document.getElementById('categoryPivotTable');
         if (!pivotContainer) return;
 
-        // Calculate category totals from table data (not database)
+        // Calculate category totals from table data (array format from Handsontable)
         const categoryTotals = {};
         let totalAmount = 0;
-        
-        tableData.forEach(row => {
-            if (row && row.category && row.amount) {
-                if (!categoryTotals[row.category]) {
-                    categoryTotals[row.category] = 0;
+
+        console.log('=== DEBUG: Processing table data for category breakdown ===');
+        console.log('Table data type:', typeof tableData);
+        console.log('Table data length:', tableData.length);
+        console.log('First row sample:', tableData[0]);
+
+        tableData.forEach((row, index) => {
+            if (row && Array.isArray(row) && row.length >= 4) {
+                // Handsontable data is in array format: [date, category, amount, description, user_name, id]
+                const category = row[1]; // Column 1 is category
+                const amount = parseFloat(row[2]) || 0; // Column 2 is amount
+                
+                console.log(`Row ${index}: category="${category}", amount=${amount}`);
+                
+                if (category && amount > 0) {
+                    if (!categoryTotals[category]) {
+                        categoryTotals[category] = 0;
+                    }
+                    categoryTotals[category] += amount;
+                    totalAmount += amount;
                 }
-                categoryTotals[row.category] += parseFloat(row.amount) || 0;
-                totalAmount += parseFloat(row.amount) || 0;
             }
         });
 
+        console.log('Category totals:', categoryTotals);
+        console.log('Total amount:', totalAmount);
+        
         // Create HTML for category breakdown
         let html = '<div class="list-group list-group-flush">';
         
@@ -1173,9 +1388,13 @@ class DashboardManager {
         expenses.forEach(expense => {
             if (!expense.date || !expense.category || !expense.amount) return;
             
-            const date = new Date(expense.date);
-            const year = date.getFullYear();
-            const month = date.getMonth(); // 0-11
+            // Parse date safely - extract YYYY-MM from the date string directly
+            // This avoids timezone issues with JavaScript Date constructor
+            const dateParts = expense.date.split('-');
+            if (dateParts.length < 2) return;
+            
+            const year = parseInt(dateParts[0]);
+            const month = parseInt(dateParts[1]) - 1; // Convert to 0-based month
             const monthName = monthNames[month];
             const category = expense.category.toLowerCase();
             
@@ -1183,7 +1402,7 @@ class DashboardManager {
             if (!yearlyData[year]) {
                 yearlyData[year] = {};
                 // Initialize all categories with all months set to 0
-                const categories = ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurants', 'service', 'shopping', 'transport', 'utilities', 'vacation'];
+                const categories = ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurant', 'service', 'shopping', 'transport', 'utility', 'vacation'];
                 categories.forEach(cat => {
                     yearlyData[year][cat] = {};
                     monthNames.forEach(month => {
@@ -1207,7 +1426,7 @@ class DashboardManager {
         
         const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
         const monthHeaders = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        const categories = ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurants', 'service', 'shopping', 'transport', 'utilities', 'vacation'];
+        const categories = ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurant', 'service', 'shopping', 'transport', 'utility', 'vacation'];
         
         let html = '';
         
@@ -1306,16 +1525,16 @@ class DashboardManager {
                 car: { jan: 100, feb: 100, mar: 100, apr: 100, may: 100, jun: 100, jul: 100, aug: 100, sep: 100, oct: 100, nov: 100, dec: 100 },
                 gas: { jan: 50, feb: 200, mar: 300, apr: 150, may: 100, jun: 75, jul: 80, aug: 90, sep: 120, oct: 110, nov: 95, dec: 50 },
                 grocery: { jan: 500, feb: 250, mar: 50, apr: 300, may: 400, jun: 350, jul: 320, aug: 280, sep: 310, oct: 290, nov: 330, dec: 600 },
-                restaurants: { jan: 265, feb: 180, mar: 220, apr: 190, may: 210, jun: 195, jul: 205, aug: 215, sep: 225, oct: 235, nov: 245, dec: 255 },
-                utilities: { jan: 150, feb: 145, mar: 160, apr: 155, may: 165, jun: 170, jul: 175, aug: 180, sep: 185, oct: 190, nov: 195, dec: 200 },
+                restaurant: { jan: 265, feb: 180, mar: 220, apr: 190, may: 210, jun: 195, jul: 205, aug: 215, sep: 225, oct: 235, nov: 245, dec: 255 },
+                utility: { jan: 150, feb: 145, mar: 160, apr: 155, may: 165, jun: 170, jul: 175, aug: 180, sep: 185, oct: 190, nov: 195, dec: 200 },
                 misc: { jan: 75, feb: 80, mar: 65, apr: 90, may: 85, jun: 95, jul: 100, aug: 110, sep: 105, oct: 115, nov: 125, dec: 135 }
             },
             2025: {
                 car: { jan: 120, feb: 120, mar: 120, apr: 120, may: 120, jun: 120, jul: 120, aug: 120, sep: 120, oct: 120, nov: 120, dec: 120 },
                 gas: { jan: 60, feb: 220, mar: 320, apr: 160, may: 110, jun: 85, jul: 90, aug: 100, sep: 130, oct: 120, nov: 105, dec: 60 },
                 grocery: { jan: 520, feb: 270, mar: 60, apr: 320, may: 420, jun: 370, jul: 340, aug: 300, sep: 330, oct: 310, nov: 350, dec: 620 },
-                restaurants: { jan: 275, feb: 190, mar: 230, apr: 200, may: 220, jun: 205, jul: 215, aug: 225, sep: 235, oct: 245, nov: 255, dec: 265 },
-                utilities: { jan: 160, feb: 155, mar: 170, apr: 165, may: 175, jun: 180, jul: 185, aug: 190, sep: 195, oct: 200, nov: 205, dec: 210 },
+                restaurant: { jan: 275, feb: 190, mar: 230, apr: 200, may: 220, jun: 205, jul: 215, aug: 225, sep: 235, oct: 245, nov: 255, dec: 265 },
+                utility: { jan: 160, feb: 155, mar: 170, apr: 165, may: 175, jun: 180, jul: 185, aug: 190, sep: 195, oct: 200, nov: 205, dec: 210 },
                 misc: { jan: 85, feb: 90, mar: 75, apr: 100, may: 95, jun: 105, jul: 110, aug: 120, sep: 115, oct: 125, nov: 135, dec: 145 }
             }
         };
@@ -1333,34 +1552,49 @@ class DashboardManager {
                 return;
             }
             
-            const updatedExpense = {
+            const expenseData = {
                 date: rowData.date,
                 description: rowData.description,
                 amount: parseFloat(rowData.amount),
                 category: rowData.category || 'misc'
             };
             
-            // Update the expense using PUT
-            await ApiClient.expenses.update(this.dashboardId, rowId, updatedExpense);
-            
-            // Update the category breakdown immediately from the current table data
-            const currentTableData = this.monthlyTable.getData();
-            this.updateCategoryBreakdownFromTableData(currentTableData);
-            
-            // Add a small delay to ensure database has time to update
-            await new Promise(resolve => setTimeout(resolve, 200));
-            
-            // Refresh the table to show the updated data from database
-            const selectedMonth = this.getSelectedMonthFromDropdown();
-            if (selectedMonth) {
-                await this.refreshMonthlyData(selectedMonth);
+            // Check if this is a new row (ID = 'new') or an existing row
+            if (rowId === 'new') {
+                // Create new expense in database
+                const result = await ApiClient.expenses.create(this.dashboardId, expenseData);
+                console.log('New expense created:', result);
+                
+                // Refresh the table to get the new expense with its real ID
+                const selectedMonth = this.getSelectedMonthFromDropdown();
+                if (selectedMonth) {
+                    await this.refreshMonthlyData(selectedMonth);
+                }
+                
+                Utils.showNotification('New expense saved successfully', 'success');
+            } else {
+                // Update existing expense using PUT
+                await ApiClient.expenses.update(this.dashboardId, rowId, expenseData);
+                
+                // Update the category breakdown immediately from the current table data
+                const currentTableData = this.monthlyTable.getData();
+                this.updateCategoryBreakdownFromTableData(currentTableData);
+                
+                // Refresh yearly table to reflect the changes
+                await this.initYearlyTable();
+                
+                Utils.showNotification('Expense updated successfully', 'success');
             }
-            
-            Utils.showNotification('Expense updated successfully', 'success');
             
         } catch (error) {
             console.error('Error updating monthly changes:', error);
-            Utils.showNotification('Error updating expense: ' + error.message, 'danger');
+            
+            // Handle 403 Forbidden errors specifically
+            if (error.status === 403) {
+                Utils.showNotification(error.message || 'You do not have permission to edit this expense', 'danger');
+            } else {
+                Utils.showNotification('Error saving expense: ' + error.message, 'danger');
+            }
         }
     }
     
@@ -1378,25 +1612,111 @@ class DashboardManager {
             const rowIndex = selection[0].start.row;
             console.log('Adding new row at index:', rowIndex);
             
-            // Create a new expense with default values
-            const newExpense = {
+            // Create a temporary local row with placeholder values
+            const newRow = {
                 date: new Date().toISOString().split('T')[0], // Today's date
                 description: 'New Expense',
                 amount: 0.00,
-                category: 'misc'
+                category: 'misc',
+                user_name: window.currentUserName || 'Current User',
+                id: 'new' // Temporary ID for new rows
             };
             
-            console.log('Creating new expense:', newExpense);
-            const result = await ApiClient.expenses.create(this.dashboardId, newExpense);
+            // Get current data and insert new row
+            const currentData = this.monthlyTable.getData();
+            const newData = [
+                ...currentData.slice(0, rowIndex),
+                [newRow.date, newRow.category, newRow.amount, newRow.description, newRow.user_name, newRow.id],
+                ...currentData.slice(rowIndex)
+            ];
             
-            // Refresh the table to show the new expense with its ID
-            await this.refreshMonthlyData(selectedMonth);
+            // Update the table with new data
+            this.monthlyTable.loadData(newData);
             
-            Utils.showNotification('New expense added successfully', 'success');
+            // Add a save button for this new row
+            this.addSaveButtonToRow(rowIndex);
+            
+            Utils.showNotification('New row added. Fill out the details and click the save button when ready.', 'info');
             
         } catch (error) {
             console.error('Error handling row addition:', error);
-            Utils.showNotification('Error adding new expense', 'danger');
+            Utils.showNotification('Error adding new row', 'danger');
+        }
+    }
+    
+    addSaveButtonToRow(rowIndex) {
+        // Create a save button element
+        const saveButton = document.createElement('button');
+        saveButton.className = 'btn btn-sm btn-success save-row-btn';
+        saveButton.innerHTML = '<i class="fas fa-save"></i>';
+        saveButton.style.marginLeft = '5px';
+        saveButton.style.marginTop = '5px';
+        saveButton.style.width = '30px'; // Fixed width for consistency
+        saveButton.style.height = '25px'; // Fixed height for consistency
+        saveButton.style.padding = '0'; // Remove padding for compact look
+        saveButton.title = 'Save this row'; // Tooltip for clarity
+        
+        // Add click event to save the row
+        saveButton.addEventListener('click', async () => {
+            await this.saveNewRow(rowIndex);
+        });
+        
+        // Find the row header cell and append the save button
+        const rowHeader = this.monthlyTable.getCell(rowIndex, -1, true); // Get row header cell
+        if (rowHeader) {
+            rowHeader.appendChild(saveButton);
+        }
+    }
+    
+    async saveNewRow(rowIndex) {
+        try {
+            // Get the row data
+            const rowData = this.monthlyTable.getDataAtRow(rowIndex);
+            console.log('Saving new row data:', rowData);
+            
+            // Extract expense data from row
+            const expenseData = {
+                date: rowData[0],
+                description: rowData[3],
+                amount: parseFloat(rowData[2]) || 0,
+                category: rowData[1] || 'misc'
+            };
+            
+            // Validate required fields
+            if (!expenseData.date || !expenseData.description || expenseData.amount <= 0) {
+                Utils.showNotification('Please fill out all required fields (Date, Description, Amount > 0)', 'warning');
+                return;
+            }
+            
+            // Create new expense in database
+            const result = await ApiClient.expenses.create(this.dashboardId, expenseData);
+            console.log('New expense created:', result);
+            
+            // Remove the save button
+            this.removeSaveButtonFromRow(rowIndex);
+            
+            // Refresh the table to get the new expense with its real ID
+            const selectedMonth = this.getSelectedMonthFromDropdown();
+            if (selectedMonth) {
+                await this.refreshMonthlyData(selectedMonth);
+            }
+            
+            Utils.showNotification('New expense saved successfully', 'success');
+            
+        } catch (error) {
+            console.error('Error saving new row:', error);
+            Utils.showNotification('Error saving expense: ' + error.message, 'danger');
+        }
+    }
+    
+    removeSaveButtonFromRow(rowIndex) {
+        // Find and remove the save button from the row header
+        const rowHeader = this.monthlyTable.getCell(rowIndex, -1, true);
+        if (rowHeader) {
+            const saveButton = rowHeader.querySelector('.save-row-btn');
+            if (saveButton) {
+                saveButton.remove();
+            }
         }
     }
     
@@ -1448,6 +1768,134 @@ class DashboardManager {
     }
 }
 
+// Invitation functionality
+function initializeInvitationFunctionality() {
+    const inviteUserBtn = document.getElementById('inviteUser');
+    if (inviteUserBtn) {
+        inviteUserBtn.addEventListener('click', sendInvitation);
+    }
+}
+
+async function sendInvitation() {
+    const emailInput = document.getElementById('shareEmail');
+    const messageInput = document.getElementById('invitationMessage');
+    const email = emailInput.value.trim();
+    const message = messageInput.value.trim();
+    
+    if (!email) {
+        Utils.showNotification('Please enter an email address', 'warning');
+        return;
+    }
+    
+    if (!validateEmail(email)) {
+        Utils.showNotification('Please enter a valid email address', 'warning');
+        return;
+    }
+    
+    try {
+        const dashboardId = window.location.pathname.split('/').pop();
+        const response = await fetch(`/api/dashboard/${dashboardId}/invite`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                email: email,
+                message: message
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            Utils.showNotification('Invitation sent successfully!', 'success');
+            
+            // Clear form and close modal
+            emailInput.value = '';
+            messageInput.value = '';
+            const modal = bootstrap.Modal.getInstance(document.getElementById('shareDashboardModal'));
+            modal.hide();
+        } else {
+            Utils.showNotification(result.error || 'Failed to send invitation', 'danger');
+        }
+    } catch (error) {
+        console.error('Error sending invitation:', error);
+        Utils.showNotification('Network error: ' + error.message, 'danger');
+    }
+}
+
+function validateEmail(email) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+}
+
+// Edit Mode Settings functionality
+function initializeEditModeSettings() {
+    const saveEditModeBtn = document.getElementById('saveEditMode');
+    if (saveEditModeBtn) {
+        saveEditModeBtn.addEventListener('click', saveEditMode);
+        loadCurrentEditMode();
+    }
+}
+
+async function loadCurrentEditMode() {
+    try {
+        const dashboardId = window.location.pathname.split('/').pop();
+        const response = await fetch(`/api/dashboard/${dashboardId}/settings`);
+        
+        if (response.ok) {
+            const settings = await response.json();
+            const editMode = settings.edit_mode || 'private';
+            
+            // Set the radio button based on current setting
+            if (editMode === 'public') {
+                document.getElementById('publicMode').checked = true;
+            } else {
+                document.getElementById('privateMode').checked = true;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading edit mode settings:', error);
+        // Default to private mode on error
+        document.getElementById('privateMode').checked = true;
+    }
+}
+
+async function saveEditMode() {
+    const privateModeRadio = document.getElementById('privateMode');
+    const publicModeRadio = document.getElementById('publicMode');
+    const saveBtn = document.getElementById('saveEditMode');
+    
+    let editMode = 'private';
+    if (publicModeRadio.checked) {
+        editMode = 'public';
+    }
+    
+    try {
+        const dashboardId = window.location.pathname.split('/').pop();
+        const response = await fetch(`/api/dashboard/${dashboardId}/settings`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                edit_mode: editMode
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            Utils.showNotification(`Edit mode set to ${editMode} mode`, 'success');
+        } else {
+            Utils.showNotification(result.error || 'Failed to save settings', 'danger');
+        }
+    } catch (error) {
+        console.error('Error saving edit mode:', error);
+        Utils.showNotification('Network error: ' + error.message, 'danger');
+    }
+}
+
 // Initialize dashboard when page loads
 document.addEventListener('DOMContentLoaded', function() {
     // Extract dashboard ID from URL or data attribute
@@ -1455,4 +1903,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (dashboardId && !isNaN(dashboardId)) {
         window.dashboardManager = new DashboardManager(dashboardId);
     }
+    
+    // Initialize edit mode settings
+    initializeEditModeSettings();
 });

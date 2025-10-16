@@ -89,10 +89,35 @@ const ApiClient = {
         
         try {
             const response = await fetch(url, config);
-            const data = await response.json();
+            
+            // Check if response has content
+            const contentType = response.headers.get('content-type');
+            let data = null;
+            
+            if (contentType && contentType.includes('application/json')) {
+                data = await response.json();
+            } else {
+                // For non-JSON responses (like empty DELETE responses), try to parse as text
+                const text = await response.text();
+                if (text) {
+                    try {
+                        data = JSON.parse(text);
+                    } catch (parseError) {
+                        // If it's not JSON, return the text or empty object
+                        data = text || {};
+                    }
+                } else {
+                    // Empty response - return success object
+                    data = { message: 'Success' };
+                }
+            }
             
             if (!response.ok) {
-                throw new Error(data.error || 'Request failed');
+                // Create a custom error with status code and message
+                const error = new Error(data.error || 'Request failed');
+                error.status = response.status;
+                error.response = data;
+                throw error;
             }
             
             return data;

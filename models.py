@@ -6,8 +6,8 @@ import json
 # Predefined expense categories
 EXPENSE_CATEGORIES = [
     'car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 
-    'hospital', 'misc', 'rent', 'mortgage', 'restaurants', 
-    'service', 'shopping', 'transport', 'utilities', 'vacation'
+    'hospital', 'misc', 'rent', 'mortgage', 'restaurant', 
+    'service', 'shopping', 'transport', 'utility', 'vacation'
 ]
 
 class User(db.Model):
@@ -139,3 +139,33 @@ class ChatSession(db.Model):
     def get_csv_data(self):
         """Get current CSV data"""
         return self.current_csv_data or self.original_csv_data
+
+class DashboardInvitation(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    invited_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    invited_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    status = db.Column(db.String(50), default='pending')  # 'pending', 'accepted', 'rejected'
+    message = db.Column(db.Text)  # Optional invitation message
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    dashboard = db.relationship('Dashboard')
+    invited_user = db.relationship('User', foreign_keys=[invited_user_id])
+    invited_by_user = db.relationship('User', foreign_keys=[invited_by_user_id])
+
+class UserDashboardSettings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    edit_mode = db.Column(db.String(50), default='private')  # 'private', 'public'
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = db.relationship('User')
+    dashboard = db.relationship('Dashboard')
+    
+    # Unique constraint - one setting per user per dashboard
+    __table_args__ = (db.UniqueConstraint('user_id', 'dashboard_id', name='unique_user_dashboard_settings'),)

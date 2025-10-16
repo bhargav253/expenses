@@ -11,35 +11,116 @@
 </div>
 
 {% if dashboards %}
-<div class="row">
+    <!-- Owner Dashboards Section -->
+    {% set owner_dashboards = [] %}
     {% for dashboard in dashboards %}
-    <div class="col-md-6 col-lg-4 mb-4">
-        <div class="card h-100 shadow-sm">
-            <div class="card-body">
-                <h5 class="card-title">{{ dashboard.name }}</h5>
-                {% if dashboard.description %}
-                <p class="card-text text-muted">{{ dashboard.description }}</p>
-                {% endif %}
-                <div class="mb-3">
-                    <small class="text-muted">
-                        <i class="fas fa-calendar me-1"></i>
-                        Created {{ dashboard.created_at.strftime('%b %d, %Y') }}
-                    </small>
-                </div>
-                <div class="d-flex justify-content-between align-items-center">
-                    <span class="badge bg-primary">
-                        <i class="fas fa-users me-1"></i>
-                        {{ dashboard.members|length }} member{% if dashboard.members|length != 1 %}s{% endif %}
-                    </span>
-                    <a href="/dashboard/{{ dashboard.id }}" class="btn btn-outline-primary btn-sm">
-                        <i class="fas fa-external-link-alt me-1"></i>Open
-                    </a>
+        {% for member in dashboard.members %}
+            {% if member.user_id == session.user.id and member.role == 'owner' %}
+                {% set _ = owner_dashboards.append(dashboard) %}
+            {% endif %}
+        {% endfor %}
+    {% endfor %}
+
+    {% if owner_dashboards %}
+    <div class="mb-5">
+        <h4 class="mb-4"><i class="fas fa-crown me-2 text-warning"></i>My Dashboards (Owner)</h4>
+        <div class="row">
+            {% for dashboard in owner_dashboards %}
+            <div class="col-md-6 col-lg-4 mb-4">
+                <div class="card h-100 shadow-sm border-warning">
+                    <div class="card-header bg-warning text-dark">
+                        <h6 class="mb-0"><i class="fas fa-crown me-2"></i>Owner</h6>
+                    </div>
+                    <div class="card-body">
+                        <h5 class="card-title">{{ dashboard.name }}</h5>
+                        {% if dashboard.description %}
+                        <p class="card-text text-muted">{{ dashboard.description }}</p>
+                        {% endif %}
+                        <div class="mb-3">
+                            <small class="text-muted">
+                                <i class="fas fa-calendar me-1"></i>
+                                Created {{ dashboard.created_at.strftime('%b %d, %Y') }}
+                            </small>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="badge bg-primary">
+                                <i class="fas fa-users me-1"></i>
+                                {{ dashboard.members|length }} member{% if dashboard.members|length != 1 %}s{% endif %}
+                            </span>
+                            <div class="btn-group">
+                                <a href="/dashboard/{{ dashboard.id }}" class="btn btn-outline-primary btn-sm">
+                                    <i class="fas fa-external-link-alt me-1"></i>Open
+                                </a>
+                                <button class="btn btn-outline-info btn-sm edit-dashboard" 
+                                        data-dashboard-id="{{ dashboard.id }}" 
+                                        data-dashboard-name="{{ dashboard.name }}">
+                                    <i class="fas fa-users-cog"></i>
+                                </button>
+                                <button class="btn btn-outline-danger btn-sm delete-dashboard" 
+                                        data-dashboard-id="{{ dashboard.id }}" 
+                                        data-dashboard-name="{{ dashboard.name }}">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
+            {% endfor %}
         </div>
     </div>
+    {% endif %}
+
+    <!-- Member Dashboards Section -->
+    {% set member_dashboards = [] %}
+    {% for dashboard in dashboards %}
+        {% for member in dashboard.members %}
+            {% if member.user_id == session.user.id and member.role == 'member' %}
+                {% set _ = member_dashboards.append(dashboard) %}
+            {% endif %}
+        {% endfor %}
     {% endfor %}
-</div>
+
+    {% if member_dashboards %}
+    <div class="mb-5">
+        <h4 class="mb-4"><i class="fas fa-user me-2 text-primary"></i>Shared Dashboards (Member)</h4>
+        <div class="row">
+            {% for dashboard in member_dashboards %}
+            <div class="col-md-6 col-lg-4 mb-4">
+                <div class="card h-100 shadow-sm border-primary">
+                    <div class="card-header bg-primary text-white">
+                        <h6 class="mb-0"><i class="fas fa-user me-2"></i>Member</h6>
+                    </div>
+                    <div class="card-body">
+                        <h5 class="card-title">{{ dashboard.name }}</h5>
+                        {% if dashboard.description %}
+                        <p class="card-text text-muted">{{ dashboard.description }}</p>
+                        {% endif %}
+                        <div class="mb-3">
+                            <small class="text-muted">
+                                <i class="fas fa-calendar me-1"></i>
+                                Created {{ dashboard.created_at.strftime('%b %d, %Y') }}
+                            </small>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="badge bg-primary">
+                                <i class="fas fa-users me-1"></i>
+                                {{ dashboard.members|length }} member{% if dashboard.members|length != 1 %}s{% endif %}
+                            </span>
+                            <div class="btn-group">
+                                <a href="/dashboard/{{ dashboard.id }}" class="btn btn-outline-primary btn-sm">
+                                    <i class="fas fa-external-link-alt me-1"></i>Open
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
 {% else %}
 <div class="text-center py-5">
     <div class="mb-4">
@@ -50,6 +131,54 @@
     <button class="btn btn-primary btn-lg" data-bs-toggle="modal" data-bs-target="#createDashboardModal">
         <i class="fas fa-plus me-2"></i>Create Your First Dashboard
     </button>
+</div>
+{% endif %}
+
+<!-- Pending Invitations Section -->
+{% if pending_invitations %}
+<div class="mb-5">
+    <h4 class="mb-4"><i class="fas fa-envelope me-2 text-warning"></i>Pending Invitations</h4>
+    <div class="row">
+        {% for invitation in pending_invitations %}
+        <div class="col-md-6 col-lg-4 mb-4">
+            <div class="card h-100 shadow-sm border-warning">
+                <div class="card-header bg-warning text-dark">
+                    <h6 class="mb-0"><i class="fas fa-user-plus me-2"></i>Invitation</h6>
+                </div>
+                <div class="card-body">
+                    <h6 class="card-title">{{ invitation.dashboard.name }}</h6>
+                    {% if invitation.dashboard.description %}
+                    <p class="card-text text-muted small">{{ invitation.dashboard.description }}</p>
+                    {% endif %}
+                    <div class="mb-3">
+                        <small class="text-muted">
+                            <i class="fas fa-user me-1"></i>
+                            Invited by: {{ invitation.invited_by_user.name }}
+                        </small>
+                    </div>
+                    {% if invitation.message %}
+                    <div class="mb-3">
+                        <small class="text-muted">
+                            <i class="fas fa-comment me-1"></i>
+                            "{{ invitation.message }}"
+                        </small>
+                    </div>
+                    {% endif %}
+                    <div class="d-flex justify-content-between">
+                        <button class="btn btn-success btn-sm accept-invitation" 
+                                data-invitation-id="{{ invitation.id }}">
+                            <i class="fas fa-check me-1"></i>Accept
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm reject-invitation" 
+                                data-invitation-id="{{ invitation.id }}">
+                            <i class="fas fa-times me-1"></i>Reject
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
 </div>
 {% endif %}
 
@@ -81,6 +210,39 @@
                     </button>
                 </div>
             </form>
+        </div>
+    </div>
+</div>
+
+<!-- Manage Dashboard Members Modal -->
+<div class="modal fade" id="manageMembersModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="manageMembersModalTitle">Manage Dashboard Members</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-4">
+                    <h6>Add New Member</h6>
+                    <div class="input-group">
+                        <input type="email" class="form-control" id="inviteEmail" placeholder="Enter email address">
+                        <button class="btn btn-primary" id="sendInvitation">
+                            <i class="fas fa-envelope me-1"></i>Invite
+                        </button>
+                    </div>
+                </div>
+                
+                <div>
+                    <h6>Current Members</h6>
+                    <div id="membersList" class="list-group">
+                        <!-- Members will be populated here -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
         </div>
     </div>
 </div>
@@ -123,6 +285,227 @@ document.addEventListener('DOMContentLoaded', function() {
             alert('Network error: ' + error.message);
         }
     });
+
+    // Delete dashboard functionality
+    const deleteButtons = document.querySelectorAll('.delete-dashboard');
+    deleteButtons.forEach(button => {
+        button.addEventListener('click', async function() {
+            const dashboardId = this.getAttribute('data-dashboard-id');
+            const dashboardName = this.getAttribute('data-dashboard-name');
+            
+            // Confirm deletion
+            const confirmed = confirm(`Are you sure you want to delete the dashboard "${dashboardName}"? This action cannot be undone and will delete all associated expenses and data.`);
+            
+            if (confirmed) {
+                try {
+                    const response = await fetch(`/api/dashboard/${dashboardId}`, {
+                        method: 'DELETE',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (response.ok) {
+                        alert('Dashboard deleted successfully!');
+                        window.location.reload();
+                    } else {
+                        alert(result.error || 'Failed to delete dashboard');
+                    }
+                } catch (error) {
+                    alert('Network error: ' + error.message);
+                }
+            }
+        });
+    });
+
+    // Handle invitation responses
+    const acceptButtons = document.querySelectorAll('.accept-invitation');
+    const rejectButtons = document.querySelectorAll('.reject-invitation');
+    
+    acceptButtons.forEach(button => {
+        button.addEventListener('click', async function() {
+            const invitationId = this.getAttribute('data-invitation-id');
+            await respondToInvitation(invitationId, 'accept');
+        });
+    });
+    
+    rejectButtons.forEach(button => {
+        button.addEventListener('click', async function() {
+            const invitationId = this.getAttribute('data-invitation-id');
+            await respondToInvitation(invitationId, 'reject');
+        });
+    });
+    
+    async function respondToInvitation(invitationId, action) {
+        try {
+            const response = await fetch(`/api/dashboard/invitations/${invitationId}/respond`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ action: action })
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok) {
+                alert(result.message);
+                window.location.reload();
+            } else {
+                alert(result.error || 'Failed to process invitation');
+            }
+        } catch (error) {
+            alert('Network error: ' + error.message);
+        }
+    }
+
+    // Edit dashboard functionality - manage members
+    const editButtons = document.querySelectorAll('.edit-dashboard');
+    editButtons.forEach(button => {
+        button.addEventListener('click', async function() {
+            const dashboardId = this.getAttribute('data-dashboard-id');
+            const dashboardName = this.getAttribute('data-dashboard-name');
+            
+            // Set modal title
+            document.getElementById('manageMembersModalTitle').textContent = `Manage Members - ${dashboardName}`;
+            
+            // Load current members
+            await loadDashboardMembers(dashboardId);
+            
+            // Set up invitation functionality
+            const sendInvitationBtn = document.getElementById('sendInvitation');
+            const inviteEmailInput = document.getElementById('inviteEmail');
+            
+            sendInvitationBtn.onclick = async function() {
+                const email = inviteEmailInput.value.trim();
+                if (!email) {
+                    alert('Please enter an email address');
+                    return;
+                }
+                
+                if (!validateEmail(email)) {
+                    alert('Please enter a valid email address');
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`/api/dashboard/${dashboardId}/invite`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            email: email,
+                            message: `You have been invited to join the dashboard "${dashboardName}"`
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (response.ok) {
+                        alert('Invitation sent successfully!');
+                        inviteEmailInput.value = '';
+                        await loadDashboardMembers(dashboardId); // Refresh members list
+                    } else {
+                        alert(result.error || 'Failed to send invitation');
+                    }
+                } catch (error) {
+                    alert('Network error: ' + error.message);
+                }
+            };
+            
+            // Show the modal
+            const modal = new bootstrap.Modal(document.getElementById('manageMembersModal'));
+            modal.show();
+        });
+    });
+
+    async function loadDashboardMembers(dashboardId) {
+        try {
+            const response = await fetch(`/api/dashboard/${dashboardId}/members`);
+            const members = await response.json();
+            
+            const membersList = document.getElementById('membersList');
+            membersList.innerHTML = '';
+            
+            members.forEach(member => {
+                const memberItem = document.createElement('div');
+                memberItem.className = 'list-group-item d-flex justify-content-between align-items-center';
+                memberItem.innerHTML = `
+                    <div>
+                        <strong>${member.user.name}</strong>
+                        <br>
+                        <small class="text-muted">${member.user.email}</small>
+                    </div>
+                    <div>
+                        <span class="badge bg-${member.role === 'owner' ? 'warning' : 'primary'} me-2">
+                            ${member.role}
+                        </span>
+                        ${member.role !== 'owner' ? `
+                        <button class="btn btn-outline-danger btn-sm remove-member" 
+                                data-user-id="${member.user.id}" 
+                                data-user-name="${member.user.name}">
+                            <i class="fas fa-user-minus"></i>
+                        </button>
+                        ` : ''}
+                    </div>
+                `;
+                membersList.appendChild(memberItem);
+            });
+            
+            // Add event listeners for remove buttons
+            const removeButtons = document.querySelectorAll('.remove-member');
+            removeButtons.forEach(button => {
+                button.addEventListener('click', async function() {
+                    const userId = this.getAttribute('data-user-id');
+                    const userName = this.getAttribute('data-user-name');
+                    
+                    const confirmed = confirm(`Are you sure you want to remove ${userName} from this dashboard?`);
+                    if (confirmed) {
+                        await removeDashboardMember(dashboardId, userId);
+                    }
+                });
+            });
+            
+        } catch (error) {
+            console.error('Error loading dashboard members:', error);
+            alert('Failed to load dashboard members');
+        }
+    }
+
+    async function removeDashboardMember(dashboardId, userId) {
+        try {
+            // Note: This endpoint needs to be implemented in the backend
+            // For now, we'll use a placeholder - in a real implementation, you'd need to add this API endpoint
+            alert('Remove member functionality would be implemented here. In a full implementation, this would call an API endpoint to remove the member.');
+            
+            // Example of what the API call would look like:
+            /*
+            const response = await fetch(`/api/dashboard/${dashboardId}/members/${userId}`, {
+                method: 'DELETE'
+            });
+            
+            if (response.ok) {
+                alert('Member removed successfully');
+                await loadDashboardMembers(dashboardId); // Refresh the list
+            } else {
+                const result = await response.json();
+                alert(result.error || 'Failed to remove member');
+            }
+            */
+            
+        } catch (error) {
+            console.error('Error removing member:', error);
+            alert('Failed to remove member');
+        }
+    }
+
+    function validateEmail(email) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return emailRegex.test(email);
+    }
 });
 </script>
 {% endblock %}
