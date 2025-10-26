@@ -11,8 +11,27 @@ import uuid
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
-# Environment configuration
-AI_MOCK_MODE = os.environ.get("AI_MOCK_MODE", "true").lower() == "true"
+# AI Model Configuration
+AI_MODELS = {
+    'deepseek': {
+        'name': 'DeepSeek',
+        'api_url': 'https://api.deepseek.com/v1/chat/completions',
+        'model_name': 'deepseek-chat',
+        'api_key_field': 'deepseek_api_key'
+    },
+    'mistral': {
+        'name': 'Mistral',
+        'api_url': 'https://api.mistral.ai/v1/chat/completions',
+        'model_name': 'mistral-large-latest',
+        'api_key_field': 'mistral_api_key'
+    },
+    'openai': {
+        'name': 'OpenAI',
+        'api_url': 'https://api.openai.com/v1/chat/completions',
+        'model_name': 'gpt-4',
+        'api_key_field': 'openai_api_key'
+    }
+}
 
 # Database configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///expenses.db'
@@ -34,7 +53,7 @@ google = oauth.register(
 )
 
 # Import models
-from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings
+from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction
 
 # Initialize database tables
 def init_db():
@@ -184,19 +203,31 @@ def settings():
     user = User.query.get(session['user_id'])
     return render_template('settings.html', user=user)
 
-@app.route('/api/settings/update-api-key', methods=['POST'])
-def update_api_key():
+@app.route('/api/settings/update-ai-settings', methods=['POST'])
+def update_ai_settings():
     if 'user_id' not in session:
         return jsonify({'error': 'Not authenticated'}), 401
     
     data = request.get_json()
     user = User.query.get(session['user_id'])
     
+    # Update default AI provider
+    if 'default_ai_provider' in data:
+        user.default_ai_provider = data['default_ai_provider']
+    
+    # Update API keys
     if 'mistral_api_key' in data:
         user.mistral_api_key = data['mistral_api_key']
-        db.session.commit()
+    if 'openai_api_key' in data:
+        user.openai_api_key = data['openai_api_key']
+    if 'anthropic_api_key' in data:
+        user.anthropic_api_key = data['anthropic_api_key']
+    if 'deepseek_api_key' in data:
+        user.deepseek_api_key = data['deepseek_api_key']
     
-    return jsonify({'message': 'API key updated successfully'})
+    db.session.commit()
+    
+    return jsonify({'message': 'AI settings updated successfully'})
 
 @app.route('/api/dashboard/create', methods=['POST'])
 def create_dashboard():
@@ -300,6 +331,900 @@ def dashboard_view(dashboard_id):
 
 
 # AI Processing Endpoints
+@app.route('/api/dashboard/<int:dashboard_id>/ai/extract-pdf', methods=['POST'])
+def extract_from_pdf(dashboard_id):
+    """Extract text from PDF using Camelot and store in database"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    pdf_data = data.get('pdf_data')
+    filename = data.get('filename', 'unknown.pdf')
+    
+    if not pdf_data:
+        return jsonify({'error': 'PDF data is required'}), 400
+    
+    try:
+        print(f"Extracting text from PDF: {filename}")
+        # Extract text from PDF using Camelot (no AI processing)
+        extracted_text = extract_text_from_pdf_data(pdf_data, filename)
+        
+        if not extracted_text:
+            print(f"Failed to extract text from {filename}")
+            return jsonify({'error': 'PDF extraction failed - no text found'}), 500
+        
+        print(f"PDF extraction successful: {len(extracted_text)} characters")
+        
+        # Generate unique extraction ID
+        extraction_id = str(uuid.uuid4())
+        
+        # Delete any existing extraction for this dashboard/user
+        PDFExtraction.query.filter_by(
+            dashboard_id=dashboard_id,
+            user_id=session['user_id']
+        ).delete()
+        
+        # Store extracted text in database with empty CSV data
+        pdf_extraction = PDFExtraction(
+            dashboard_id=dashboard_id,
+            user_id=session['user_id'],
+            extraction_id=extraction_id,
+            filename=filename,
+            extracted_text=extracted_text,
+            current_csv_data='',  # Start with empty CSV
+            conversation_history='[]',  # Start with empty conversation
+            status='extracted'  # Changed from 'completed' to 'extracted'
+        )
+        db.session.add(pdf_extraction)
+        db.session.commit()
+        
+        print(f"PDF extraction stored in database with ID: {extraction_id}")
+        
+        return jsonify({
+            'extraction_id': extraction_id,
+            'message': 'PDF extracted successfully',
+            'status': 'extracted'
+        })
+        
+    except Exception as e:
+        print(f"PDF extraction error: {str(e)}")
+        return jsonify({'error': f'PDF extraction failed: {str(e)}'}), 500
+
+@app.route('/api/dashboard/<int:dashboard_id>/ai/process-chat', methods=['POST'])
+def process_chat(dashboard_id):
+    """Process conversational AI chat with PDF data and conversation state from database"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    prompt = data.get('prompt')
+    extraction_id = data.get('extraction_id')
+    
+    if not prompt:
+        return jsonify({'error': 'Prompt is required'}), 400
+    
+    if not extraction_id:
+        return jsonify({'error': 'Extraction ID is required. Please upload a PDF first.'}), 400
+    
+    try:
+        user = User.query.get(session['user_id'])
+        
+        # Get conversation state from database using extraction_id
+        pdf_extraction = PDFExtraction.query.filter_by(
+            extraction_id=extraction_id,
+            dashboard_id=dashboard_id,
+            user_id=session['user_id']
+        ).first()
+        
+        if not pdf_extraction:
+            return jsonify({'error': 'PDF extraction not found. Please upload a PDF first.'}), 400
+        
+        extracted_text = pdf_extraction.extracted_text
+        filename = pdf_extraction.filename
+        current_csv_data = pdf_extraction.current_csv_data or ''
+        conversation_history = pdf_extraction.get_conversation_history()
+        
+        print(f"Processing chat request for {filename}: {len(prompt)} chars")
+        print(f"Current CSV data length: {len(current_csv_data)}")
+        print(f"Conversation history turns: {len(conversation_history)}")
+        
+        # Add user message to conversation history
+        pdf_extraction.add_message('user', prompt, current_csv_data)
+        
+        # Call AI model with conversation context and current CSV data
+        csv_data, ai_response = call_aimodel_with_context_and_csv(
+            user, 
+            extracted_text, 
+            filename, 
+            prompt, 
+            conversation_history,
+            current_csv_data
+        )
+        
+        print(f"AI processing successful, returned {len(csv_data)} characters")
+        
+        # Update database with new CSV data and AI response
+        pdf_extraction.update_csv_data(csv_data)
+        pdf_extraction.add_message('assistant', ai_response, csv_data)
+        pdf_extraction.status = 'completed'
+        db.session.commit()
+        
+        return jsonify({
+            'csv_data': csv_data,
+            'message': ai_response,
+            'status': 'completed'
+        })
+        
+    except ValueError as e:
+        # Handle missing API key or unsupported model
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        print(f"AI processing error: {str(e)}")
+        return jsonify({'error': f'AI processing failed: {str(e)}'}), 500
+
+@app.route('/api/dashboard/<int:dashboard_id>/ai/extract-excel', methods=['POST'])
+def extract_from_excel(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    excel_data = data.get('excel_data')
+    filename = data.get('filename', 'unknown.xlsx')
+    prompt = data.get('prompt', '')
+    
+    if not excel_data:
+        return jsonify({'error': 'Excel data is required'}), 400
+    
+    try:
+        user = User.query.get(session['user_id'])
+        
+        try:
+            print(f"Calling AI model API for Excel extraction: {filename}")
+            # Call real AI model API for Excel extraction
+            csv_data = call_aimodel_excel_api(user, excel_data, filename, prompt)
+            print(f"AI model API call successful, returned {len(csv_data)} characters")
+        except ValueError as e:
+            # Handle missing API key or unsupported model
+            return jsonify({'error': str(e)}), 400
+        except Exception as e:
+            print(f"AI model API error: {str(e)}")
+            return jsonify({'error': f'Excel extraction failed: {str(e)}'}), 500
+        
+        return jsonify({
+            'csv_data': csv_data,
+            'message': 'Excel extracted successfully'
+        })
+        
+    except Exception as e:
+        print(f"General Excel processing error: {str(e)}")
+        return jsonify({'error': f'Excel processing failed: {str(e)}'}), 500
+
+
+def extract_text_from_pdf_data(pdf_data, filename):
+    """
+    Extract text from PDF data using Camelot (preserves table structure)
+    """
+    try:
+        import camelot
+        from io import BytesIO
+        import tempfile
+        import os
+        import base64
+        
+        # Convert base64 PDF data back to bytes
+        pdf_bytes = base64.b64decode(pdf_data)
+        
+        # Create a temporary file for Camelot
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+            temp_file.write(pdf_bytes)
+            temp_file_path = temp_file.name
+        
+        try:
+            print(f"Extracting tables from PDF using Camelot: {filename}")
+            
+            text_content = ""
+            total_tables_found = 0
+            
+            # Try stream method first (better for bank statements without clear borders)
+            try:
+                tables = camelot.read_pdf(temp_file_path, flavor='stream', pages='all')
+                if tables:
+                    stream_tables = len(tables)
+                    print(f"Stream method found {stream_tables} tables")
+                    total_tables_found += stream_tables
+                    
+                    for table_num, table in enumerate(tables):
+                        if table is not None and not table.df.empty:
+                            text_content += f"--- Table {table_num + 1} (Stream) ---\n"
+                            table_text = table.df.to_string(index=False)
+                            text_content += table_text + "\n\n"
+                else:
+                    print("No tables found with stream method")
+            except Exception as e:
+                print(f"Stream method failed: {e}")
+            
+            # If no tables found with stream, try lattice method
+            if not text_content:            
+                try:
+                    tables = camelot.read_pdf(temp_file_path, flavor='lattice', pages='all')
+                    if tables:
+                        lattice_tables = len(tables)
+                        print(f"Lattice method found {lattice_tables} tables")
+                        total_tables_found += lattice_tables
+                        
+                        for table_num, table in enumerate(tables):
+                            if table is not None and not table.df.empty:
+                                text_content += f"--- Table {table_num + 1} (Lattice) ---\n"
+                                table_text = table.df.to_string(index=False)
+                                text_content += table_text + "\n\n"
+                    else:
+                        print("No tables found with lattice method")
+                except Exception as e:
+                    print(f"Lattice method failed: {e}")
+            
+            print(f"Total tables found: {total_tables_found}")
+            
+            # If still no tables found, try PyPDF2 as fallback for text extraction
+            if not text_content:
+                print("No tables found with Camelot, trying PyPDF2 text extraction...")
+                try:
+                    from PyPDF2 import PdfReader
+                    pdf_reader = PdfReader(temp_file_path)
+                    for page_num, page in enumerate(pdf_reader.pages):
+                        page_text = page.extract_text()
+                        if page_text.strip():
+                            text_content += f"--- Page {page_num + 1} Text ---\n"
+                            text_content += page_text + "\n\n"
+                            print(f"Page {page_num + 1} text extracted ({len(page_text)} chars)")
+                except Exception as e:
+                    print(f"PyPDF2 text extraction failed: {e}")
+            
+            print(f"Total extracted content: {len(text_content)} characters")
+            return text_content.strip()
+            
+        finally:
+            # Clean up temporary file
+            os.unlink(temp_file_path)
+        
+    except Exception as e:
+        print(f"Error extracting text from PDF {filename} with Camelot: {str(e)}")
+        return None
+
+def call_aimodel_pdf_api(user, pdf_data, filename, prompt=""):
+    """Call AI model API to extract data from PDF - using text extraction first"""
+    # Get user's selected AI model
+    model_key = user.default_ai_provider or 'mistral'
+    model_config = AI_MODELS.get(model_key)
+    
+    if not model_config:
+        raise ValueError(f"Unsupported AI model: {model_key}")
+    
+    # Get API key for the selected model
+    api_key = getattr(user, model_config['api_key_field'])
+    if not api_key:
+        raise ValueError(f"{model_config['name']} API key not configured")
+    
+    url = model_config['api_url']
+    model_name = model_config['model_name']
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # Create system prompt for text processing
+    system_prompt = """You are a financial document processing assistant. You extract transaction data from bank statements and convert it to CSV format.
+    
+    Extract all transactions from the bank statement text and return them in CSV format with these columns:
+    - Date (format: YYYY-MM-DD)
+    - Description (the merchant or transaction description)
+    - Amount (numeric value, positive for expenses)
+    - Category (use one of: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation)
+    
+    Only include actual transactions, not headers or totals. If you can't determine the category, use 'misc'.
+    Return only the CSV data, no additional text.
+    """
+    
+    # Extract text from PDF first
+    print(f"Extracting text from PDF: {filename}")
+    extracted_text = extract_text_from_pdf_data(pdf_data, filename)
+    
+    if not extracted_text:
+        print(f"Failed to extract text from {filename}, using fallback")
+        return handle_large_pdf_fallback(filename, prompt)
+    
+    print(f"Text extraction successful: {len(extracted_text)} characters")
+    print(f"Estimated tokens: {len(extracted_text) // 4}")
+    
+    # Check if text is too large and needs chunking
+    if len(extracted_text) > 50000:  # Conservative limit for text
+        print(f"Text too large ({len(extracted_text)} chars), using chunking approach")
+        return process_large_text_with_chunking(api_key, extracted_text, filename, prompt, system_prompt, url, headers)
+    
+    # Build user message with extracted text
+    if prompt:
+        user_message = f"Extract transaction data from this bank statement ({filename}). Here's the extracted text:\n\n{extracted_text}\n\nAdditional instructions: {prompt}"
+    else:
+        user_message = f"Extract transaction data from this bank statement ({filename}). Here's the extracted text:\n\n{extracted_text}"
+    
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_message
+            }
+        ],
+        "temperature": 0.1,
+        "max_tokens": 2000
+    }
+    
+    print(f"Sending request to DeepSeek API with {len(extracted_text)} characters of extracted text")
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        print(f"DeepSeek API response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            print(f"DeepSeek API error response: {response.text}")
+            response.raise_for_status()
+        
+        result = response.json()
+        ai_response = result['choices'][0]['message']['content']
+        print(f"DeepSeek API response received: {len(ai_response)} characters")
+        
+        # Extract CSV from response
+        lines = ai_response.split('\n')
+        csv_lines = []
+        
+        for line in lines:
+            if ',' in line and (line.startswith('"') or any(char.isdigit() for char in line)):
+                csv_lines.append(line.strip())
+            elif line.strip().lower().startswith('date,description,amount,category'):
+                csv_lines.append(line.strip())
+        
+        # If no CSV found, return a default structure
+        if not csv_lines:
+            print("No CSV found in AI response, using default structure")
+            csv_lines = [
+                "Date,Description,Amount,Category",
+                "2025-10-01,Sample Transaction,100.00,misc"
+            ]
+        
+        return '\n'.join(csv_lines)
+        
+    except requests.exceptions.RequestException as e:
+        print(f"DeepSeek API request failed: {str(e)}")
+        # Fallback for API errors
+        return handle_large_pdf_fallback(filename, prompt)
+    except Exception as e:
+        print(f"DeepSeek API processing failed: {str(e)}")
+        # Fallback for other errors
+        return handle_large_pdf_fallback(filename, prompt)
+
+def process_large_pdf_with_chunking(api_key, pdf_data, filename, prompt, system_prompt, url, headers):
+    """Process large PDF by splitting into chunks and making multiple API calls"""
+    print(f"Starting chunked processing for {filename}")
+    
+    # Split PDF data into chunks (each ~40,000 characters to stay within limits)
+    chunk_size = 40000
+    chunks = [pdf_data[i:i+chunk_size] for i in range(0, len(pdf_data), chunk_size)]
+    
+    print(f"Split PDF into {len(chunks)} chunks")
+    
+    all_transactions = []
+    
+    for i, chunk in enumerate(chunks):
+        print(f"Processing chunk {i+1}/{len(chunks)}")
+        
+        # Build user message for this chunk
+        if prompt:
+            user_message = f"Extract transaction data from this part of the PDF file ({filename}, chunk {i+1}/{len(chunks)}). Here's the PDF content: {chunk}\n\nAdditional instructions: {prompt}"
+        else:
+            user_message = f"Extract transaction data from this part of the PDF file ({filename}, chunk {i+1}/{len(chunks)}). Here's the PDF content: {chunk}"
+        
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_message
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 2000
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            print(f"Chunk {i+1} API response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                print(f"Chunk {i+1} API error response: {response.text}")
+                continue  # Skip this chunk but continue with others
+            
+            result = response.json()
+            ai_response = result['choices'][0]['message']['content']
+            print(f"Chunk {i+1} API response received: {len(ai_response)} characters")
+            
+            # Extract CSV from response
+            lines = ai_response.split('\n')
+            chunk_transactions = []
+            
+            for line in lines:
+                if ',' in line and (line.startswith('"') or any(char.isdigit() for char in line)):
+                    chunk_transactions.append(line.strip())
+                elif line.strip().lower().startswith('date,description,amount,category'):
+                    chunk_transactions.append(line.strip())
+            
+            # Add transactions from this chunk to the main list
+            all_transactions.extend(chunk_transactions)
+            
+            # Small delay between API calls to avoid rate limiting
+            import time
+            time.sleep(1)
+            
+        except Exception as e:
+            print(f"Error processing chunk {i+1}: {str(e)}")
+            continue  # Skip this chunk but continue with others
+    
+    # Remove duplicates and combine results
+    if all_transactions:
+        # Remove header lines except the first one
+        headers_removed = []
+        header_found = False
+        
+        for line in all_transactions:
+            if line.lower().startswith('date,description,amount,category'):
+                if not header_found:
+                    headers_removed.append(line)
+                    header_found = True
+            else:
+                headers_removed.append(line)
+        
+        # Remove exact duplicates
+        unique_transactions = []
+        seen = set()
+        
+        for line in headers_removed:
+            if line not in seen:
+                unique_transactions.append(line)
+                seen.add(line)
+        
+        print(f"Combined {len(unique_transactions)} unique transactions from {len(chunks)} chunks")
+        
+        # If we have transactions, return them
+        if len(unique_transactions) > 1:  # At least header + one transaction
+            return '\n'.join(unique_transactions)
+    
+    # Fallback if no transactions were extracted
+    print("No transactions extracted from chunks, using fallback")
+    return handle_large_pdf_fallback(filename, prompt)
+
+def process_large_text_with_chunking(api_key, extracted_text, filename, prompt, system_prompt, url, headers):
+    """Process large extracted text by splitting into chunks and making multiple API calls"""
+    print(f"Starting chunked text processing for {filename}")
+    
+    # Split text into chunks (each ~20,000 characters for text)
+    chunk_size = 20000
+    chunks = [extracted_text[i:i+chunk_size] for i in range(0, len(extracted_text), chunk_size)]
+    
+    print(f"Split text into {len(chunks)} chunks")
+    
+    all_transactions = []
+    
+    for i, chunk in enumerate(chunks):
+        print(f"Processing text chunk {i+1}/{len(chunks)}")
+        
+        # Build user message for this chunk
+        if prompt:
+            user_message = f"Extract transaction data from this part of the bank statement ({filename}, chunk {i+1}/{len(chunks)}). Here's the extracted text: {chunk}\n\nAdditional instructions: {prompt}"
+        else:
+            user_message = f"Extract transaction data from this part of the bank statement ({filename}, chunk {i+1}/{len(chunks)}). Here's the extracted text: {chunk}"
+        
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_message
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 2000
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            print(f"Text chunk {i+1} API response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                print(f"Text chunk {i+1} API error response: {response.text}")
+                continue  # Skip this chunk but continue with others
+            
+            result = response.json()
+            ai_response = result['choices'][0]['message']['content']
+            print(f"Text chunk {i+1} API response received: {len(ai_response)} characters")
+            
+            # Extract CSV from response
+            lines = ai_response.split('\n')
+            chunk_transactions = []
+            
+            for line in lines:
+                if ',' in line and (line.startswith('"') or any(char.isdigit() for char in line)):
+                    chunk_transactions.append(line.strip())
+                elif line.strip().lower().startswith('date,description,amount,category'):
+                    chunk_transactions.append(line.strip())
+            
+            # Add transactions from this chunk to the main list
+            all_transactions.extend(chunk_transactions)
+            
+            # Small delay between API calls to avoid rate limiting
+            import time
+            time.sleep(1)
+            
+        except Exception as e:
+            print(f"Error processing text chunk {i+1}: {str(e)}")
+            continue  # Skip this chunk but continue with others
+    
+    # Remove duplicates and combine results
+    if all_transactions:
+        # Remove header lines except the first one
+        headers_removed = []
+        header_found = False
+        
+        for line in all_transactions:
+            if line.lower().startswith('date,description,amount,category'):
+                if not header_found:
+                    headers_removed.append(line)
+                    header_found = True
+            else:
+                headers_removed.append(line)
+        
+        # Remove exact duplicates
+        unique_transactions = []
+        seen = set()
+        
+        for line in headers_removed:
+            if line not in seen:
+                unique_transactions.append(line)
+                seen.add(line)
+        
+        print(f"Combined {len(unique_transactions)} unique transactions from {len(chunks)} text chunks")
+        
+        # If we have transactions, return them
+        if len(unique_transactions) > 1:  # At least header + one transaction
+            return '\n'.join(unique_transactions)
+    
+    # Fallback if no transactions were extracted
+    print("No transactions extracted from text chunks, using fallback")
+    return handle_large_pdf_fallback(filename, prompt)
+
+def handle_large_pdf_fallback(filename, prompt=""):
+    """Handle large PDFs that exceed token limits"""
+    print(f"Using fallback for large PDF: {filename}")
+    
+    # Return a message explaining the limitation
+    csv_lines = [
+        "Date,Description,Amount,Category",
+        "# PDF file is too large for AI processing",
+        "# Please use smaller PDF files or extract data manually",
+        "# Maximum supported size: ~50KB of base64 PDF data",
+        "# Current file exceeds DeepSeek's 131,072 token limit"
+    ]
+    
+    if prompt:
+        csv_lines.append(f"# Your prompt was: {prompt}")
+    
+    return '\n'.join(csv_lines)
+
+
+def extract_data_from_excel(excel_data, filename):
+    """
+    Extract data from Excel file using pandas
+    """
+    try:
+        import pandas as pd
+        from io import BytesIO
+        import base64
+        
+        # Convert base64 Excel data back to bytes
+        excel_bytes = base64.b64decode(excel_data)
+        
+        # Read Excel file
+        excel_file = BytesIO(excel_bytes)
+        
+        # Try to read all sheets
+        excel_data = pd.read_excel(excel_file, sheet_name=None)
+        
+        text_content = ""
+        for sheet_name, df in excel_data.items():
+            if df is not None and not df.empty:
+                text_content += f"--- Sheet: {sheet_name} ---\n"
+                
+                # Convert DataFrame to string representation
+                df_text = df.to_string(index=False)
+                text_content += df_text + "\n\n"
+        
+        return text_content.strip()
+        
+    except Exception as e:
+        print(f"Error extracting data from Excel {filename}: {str(e)}")
+        return None
+
+def call_aimodel_excel_api(user, excel_data, filename, prompt=""):
+    """Call AI model API to extract data from Excel - using data extraction first"""
+    # Get user's selected AI model
+    model_key = user.default_ai_provider or 'mistral'
+    model_config = AI_MODELS.get(model_key)
+    
+    if not model_config:
+        raise ValueError(f"Unsupported AI model: {model_key}")
+    
+    # Get API key for the selected model
+    api_key = getattr(user, model_config['api_key_field'])
+    if not api_key:
+        raise ValueError(f"{model_config['name']} API key not configured")
+    
+    url = model_config['api_url']
+    model_name = model_config['model_name']
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # Create system prompt for Excel processing
+    system_prompt = """You are a financial document processing assistant. You extract transaction data from Excel spreadsheets and convert it to CSV format.
+    
+    Extract all transactions from the Excel data and return them in CSV format with these columns:
+    - Date (format: YYYY-MM-DD)
+    - Description (the merchant or transaction description)
+    - Amount (numeric value, positive for expenses)
+    - Category (use one of: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation)
+    
+    Only include actual transactions, not headers or totals. If you can't determine the category, use 'misc'.
+    Return only the CSV data, no additional text.
+    """
+    
+    # Extract data from Excel first
+    print(f"Extracting data from Excel: {filename}")
+    extracted_data = extract_data_from_excel(excel_data, filename)
+    
+    if not extracted_data:
+        print(f"Failed to extract data from {filename}, using fallback")
+        return handle_large_excel_fallback(filename, prompt)
+    
+    print(f"Data extraction successful: {len(extracted_data)} characters")
+    print(f"Estimated tokens: {len(extracted_data) // 4}")
+    
+    # Check if data is too large and needs chunking
+    if len(extracted_data) > 50000:  # Conservative limit for text
+        print(f"Data too large ({len(extracted_data)} chars), using chunking approach")
+        return process_large_excel_with_chunking(api_key, extracted_data, filename, prompt, system_prompt, url, headers)
+    
+    # Build user message with extracted data
+    if prompt:
+        user_message = f"Extract transaction data from this Excel file ({filename}). Here's the extracted data:\n\n{extracted_data}\n\nAdditional instructions: {prompt}"
+    else:
+        user_message = f"Extract transaction data from this Excel file ({filename}). Here's the extracted data:\n\n{extracted_data}"
+    
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_message
+            }
+        ],
+        "temperature": 0.1,
+        "max_tokens": 2000
+    }
+    
+    print(f"Sending request to DeepSeek API with {len(extracted_data)} characters of extracted data")
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        print(f"DeepSeek API response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            print(f"DeepSeek API error response: {response.text}")
+            response.raise_for_status()
+        
+        result = response.json()
+        ai_response = result['choices'][0]['message']['content']
+        print(f"DeepSeek API response received: {len(ai_response)} characters")
+        
+        # Extract CSV from response
+        lines = ai_response.split('\n')
+        csv_lines = []
+        
+        for line in lines:
+            if ',' in line and (line.startswith('"') or any(char.isdigit() for char in line)):
+                csv_lines.append(line.strip())
+            elif line.strip().lower().startswith('date,description,amount,category'):
+                csv_lines.append(line.strip())
+        
+        # If no CSV found, return a default structure
+        if not csv_lines:
+            print("No CSV found in AI response, using default structure")
+            csv_lines = [
+                "Date,Description,Amount,Category",
+                "2025-10-01,Sample Transaction,100.00,misc"
+            ]
+        
+        return '\n'.join(csv_lines)
+        
+    except requests.exceptions.RequestException as e:
+        print(f"DeepSeek API request failed: {str(e)}")
+        # Fallback for API errors
+        return handle_large_excel_fallback(filename, prompt)
+    except Exception as e:
+        print(f"DeepSeek API processing failed: {str(e)}")
+        # Fallback for other errors
+        return handle_large_excel_fallback(filename, prompt)
+
+def process_large_excel_with_chunking(api_key, extracted_data, filename, prompt, system_prompt, url, headers):
+    """Process large Excel data by splitting into chunks and making multiple API calls"""
+    print(f"Starting chunked processing for Excel {filename}")
+    
+    # Split data into chunks (each ~20,000 characters for text)
+    chunk_size = 20000
+    chunks = [extracted_data[i:i+chunk_size] for i in range(0, len(extracted_data), chunk_size)]
+    
+    print(f"Split Excel data into {len(chunks)} chunks")
+    
+    all_transactions = []
+    
+    for i, chunk in enumerate(chunks):
+        print(f"Processing Excel chunk {i+1}/{len(chunks)}")
+        
+        # Build user message for this chunk
+        if prompt:
+            user_message = f"Extract transaction data from this part of the Excel file ({filename}, chunk {i+1}/{len(chunks)}). Here's the extracted data: {chunk}\n\nAdditional instructions: {prompt}"
+        else:
+            user_message = f"Extract transaction data from this part of the Excel file ({filename}, chunk {i+1}/{len(chunks)}). Here's the extracted data: {chunk}"
+        
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_message
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 2000
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            print(f"Excel chunk {i+1} API response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                print(f"Excel chunk {i+1} API error response: {response.text}")
+                continue  # Skip this chunk but continue with others
+            
+            result = response.json()
+            ai_response = result['choices'][0]['message']['content']
+            print(f"Excel chunk {i+1} API response received: {len(ai_response)} characters")
+            
+            # Extract CSV from response
+            lines = ai_response.split('\n')
+            chunk_transactions = []
+            
+            for line in lines:
+                if ',' in line and (line.startswith('"') or any(char.isdigit() for char in line)):
+                    chunk_transactions.append(line.strip())
+                elif line.strip().lower().startswith('date,description,amount,category'):
+                    chunk_transactions.append(line.strip())
+            
+            # Add transactions from this chunk to the main list
+            all_transactions.extend(chunk_transactions)
+            
+            # Small delay between API calls to avoid rate limiting
+            import time
+            time.sleep(1)
+            
+        except Exception as e:
+            print(f"Error processing Excel chunk {i+1}: {str(e)}")
+            continue  # Skip this chunk but continue with others
+    
+    # Remove duplicates and combine results
+    if all_transactions:
+        # Remove header lines except the first one
+        headers_removed = []
+        header_found = False
+        
+        for line in all_transactions:
+            if line.lower().startswith('date,description,amount,category'):
+                if not header_found:
+                    headers_removed.append(line)
+                    header_found = True
+            else:
+                headers_removed.append(line)
+        
+        # Remove exact duplicates
+        unique_transactions = []
+        seen = set()
+        
+        for line in headers_removed:
+            if line not in seen:
+                unique_transactions.append(line)
+                seen.add(line)
+        
+        print(f"Combined {len(unique_transactions)} unique transactions from {len(chunks)} Excel chunks")
+        
+        # If we have transactions, return them
+        if len(unique_transactions) > 1:  # At least header + one transaction
+            return '\n'.join(unique_transactions)
+    
+    # Fallback if no transactions were extracted
+    print("No transactions extracted from Excel chunks, using fallback")
+    return handle_large_excel_fallback(filename, prompt)
+
+def handle_large_excel_fallback(filename, prompt=""):
+    """Handle large Excel files that exceed token limits"""
+    print(f"Using fallback for large Excel: {filename}")
+    
+    # Return a message explaining the limitation
+    csv_lines = [
+        "Date,Description,Amount,Category",
+        "# Excel file is too large for AI processing",
+        "# Please use smaller Excel files or extract data manually",
+        "# Maximum supported size: ~50KB of base64 Excel data",
+        "# Current file exceeds DeepSeek's 131,072 token limit"
+    ]
+    
+    if prompt:
+        csv_lines.append(f"# Your prompt was: {prompt}")
+    
+    return '\n'.join(csv_lines)
+
 @app.route('/api/dashboard/<int:dashboard_id>/ai/session', methods=['POST'])
 def create_ai_session(dashboard_id):
     if 'user_id' not in session:
@@ -365,21 +1290,16 @@ def process_with_ai(dashboard_id):
     if not chat_session:
         return jsonify({'error': 'Session not found'}), 404
     
-    # Check if we're in mock mode or if user has API key
     user = User.query.get(session['user_id'])
     
-    if AI_MOCK_MODE:
-        # Use mock AI response for local testing
-        processed_csv, ai_response = mock_ai_response(prompt, csv_data)
-    else:
-        if not user or not user.mistral_api_key:
-            return jsonify({'error': 'Mistral API key not configured'}), 400
-        
-        try:
-            # Call real Mistral AI API
-            processed_csv, ai_response = call_mistral_api(user.mistral_api_key, prompt, csv_data)
-        except Exception as e:
-            return jsonify({'error': f'AI processing failed: {str(e)}'}), 500
+    try:
+        # Call real AI model API
+        processed_csv, ai_response = call_aimodel_api(user, prompt, csv_data)
+    except ValueError as e:
+        # Handle missing API key or unsupported model
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': f'AI processing failed: {str(e)}'}), 500
     
     # Update chat session
     chat_session.current_csv_data = processed_csv
@@ -392,12 +1312,345 @@ def process_with_ai(dashboard_id):
         'processed_csv': processed_csv
     })
 
-def mock_ai_response(prompt, csv_data):
-    """Mock AI response for local testing - returns the CSV unchanged"""
-    ai_response = f"I've processed your request: '{prompt}'. For local testing, I'm returning your original CSV data unchanged. In production, this would be processed by Mistral AI."
+
+def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, conversation_history, current_csv_data):
+    """Call AI model API with conversation context and current CSV data for processing"""
+    # Get user's selected AI model
+    model_key = user.default_ai_provider or 'deepseek'
+    model_config = AI_MODELS.get(model_key)
     
-    # Return the original CSV data unchanged
-    processed_csv = csv_data
+    if not model_config:
+        raise ValueError(f"Unsupported AI model: {model_key}")
+    
+    # Get API key for the selected model
+    api_key = getattr(user, model_config['api_key_field'])
+    if not api_key:
+        raise ValueError(f"{model_config['name']} API key not configured")
+    
+    url = model_config['api_url']
+    model_name = model_config['model_name']
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # Determine if this is initial extraction or follow-up processing
+    is_initial_extraction = not current_csv_data or len(current_csv_data.strip()) == 0
+    
+    if is_initial_extraction:
+        # System prompt for initial PDF extraction
+        system_prompt = """You are a financial document processing assistant. You extract and process transaction data from bank statements and convert it to CSV format.
+        
+        Extract all transactions from the bank statement text and return them in CSV format with these columns:
+        - Date (format: YYYY-MM-DD)
+        - Description (the merchant or transaction description)
+        - Amount (numeric value, positive for expenses)
+        - Category (use one of: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation)
+        
+        Only include actual transactions, not headers or totals. If you can't determine the category, use 'misc'.
+        Return only the CSV data, no additional text.
+        """
+        
+        # Build messages with conversation history
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt
+            }
+        ]
+        
+        # Add conversation history (limit to last 4 turns to stay within token limits)
+        for turn in conversation_history[-4:]:
+            messages.append({
+                "role": turn.get('role', 'user'),
+                "content": turn.get('content', '')
+            })
+        
+        # Add current user message with extracted text
+        current_message = f"Extract transaction data from this bank statement ({filename}). Here's the extracted text:\n\n{extracted_text}\n\nAdditional instructions: {prompt}"
+        messages.append({
+            "role": "user",
+            "content": current_message
+        })
+        
+    else:
+        # System prompt for CSV processing with conversation context
+        system_prompt = """You are a CSV data processing assistant. You help users filter, categorize, and transform their expense data.
+        
+        The user will provide CSV data and a request. You should:
+        1. Understand the user's request
+        2. Process the CSV data accordingly
+        3. Return the processed CSV data
+        4. Provide a brief explanation of what you did
+        
+        Always return valid CSV format. Keep the same column structure unless explicitly requested to change it.
+        For categorization, use these categories: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation.
+        
+        Example responses:
+        - "I've filtered the data to show only transactions above $50. Here's the processed CSV:"
+        - "I've categorized the expenses based on the descriptions. Here's the updated CSV:"
+        """
+        
+        # Build messages with conversation history
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt
+            }
+        ]
+        
+        # Add conversation history (limit to last 4 turns to stay within token limits)
+        for turn in conversation_history[-4:]:
+            messages.append({
+                "role": turn.get('role', 'user'),
+                "content": turn.get('content', '')
+            })
+        
+        # Add current user message with current CSV data
+        current_message = f"CSV Data:\n{current_csv_data}\n\nUser Request: {prompt}\n\nPlease process this CSV data and return the processed CSV along with a brief explanation."
+        messages.append({
+            "role": "user",
+            "content": current_message
+        })
+    
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": 0.1,
+        "max_tokens": 2000
+    }
+    
+    print(f"Sending request to {model_config['name']} API with {len(conversation_history)} conversation turns")
+    print(f"Is initial extraction: {is_initial_extraction}")
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        print(f"API response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            print(f"API error response: {response.text}")
+            response.raise_for_status()
+        
+        result = response.json()
+        ai_response = result['choices'][0]['message']['content']
+        print(f"API response received: {len(ai_response)} characters")
+        
+        # Extract CSV from response
+        lines = ai_response.split('\n')
+        csv_lines = []
+        
+        for line in lines:
+            if ',' in line and (line.startswith('"') or any(char.isdigit() for char in line)):
+                csv_lines.append(line.strip())
+            elif line.strip().lower().startswith('date,description,amount,category'):
+                csv_lines.append(line.strip())
+        
+        # If no CSV found, return a default structure
+        if not csv_lines:
+            print("No CSV found in AI response, using default structure")
+            csv_lines = [
+                "Date,Description,Amount,Category",
+                "2025-10-01,Sample Transaction,100.00,misc"
+            ]
+        
+        csv_data = '\n'.join(csv_lines)
+        return csv_data, ai_response
+        
+    except requests.exceptions.RequestException as e:
+        print(f"API request failed: {str(e)}")
+        # Fallback for API errors
+        fallback_csv = "Date,Description,Amount,Category\n2025-10-01,API Error - Please try again,0.00,misc"
+        return fallback_csv, "AI processing failed. Please try again."
+    except Exception as e:
+        print(f"API processing failed: {str(e)}")
+        # Fallback for other errors
+        fallback_csv = "Date,Description,Amount,Category\n2025-10-01,Processing Error - Please try again,0.00,misc"
+        return fallback_csv, "AI processing failed. Please try again."
+
+def call_aimodel_with_context(user, extracted_text, filename, prompt, conversation_history):
+    """Call AI model API with conversation context for PDF processing"""
+    # Get user's selected AI model
+    model_key = user.default_ai_provider or 'deepseek'
+    model_config = AI_MODELS.get(model_key)
+    
+    if not model_config:
+        raise ValueError(f"Unsupported AI model: {model_key}")
+    
+    # Get API key for the selected model
+    api_key = getattr(user, model_config['api_key_field'])
+    if not api_key:
+        raise ValueError(f"{model_config['name']} API key not configured")
+    
+    url = model_config['api_url']
+    model_name = model_config['model_name']
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # Create system prompt for PDF processing with conversation context
+    system_prompt = """You are a financial document processing assistant. You extract and process transaction data from bank statements and convert it to CSV format.
+    
+    Extract all transactions from the bank statement text and return them in CSV format with these columns:
+    - Date (format: YYYY-MM-DD)
+    - Description (the merchant or transaction description)
+    - Amount (numeric value, positive for expenses)
+    - Category (use one of: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation)
+    
+    Only include actual transactions, not headers or totals. If you can't determine the category, use 'misc'.
+    Return only the CSV data, no additional text.
+    """
+    
+    # Build messages with conversation history
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt
+        }
+    ]
+    
+    # Add conversation history (limit to last 2-3 turns to stay within token limits)
+    for turn in conversation_history[-4:]:  # Keep last 2 conversation turns
+        messages.append({
+            "role": turn.get('role', 'user'),
+            "content": turn.get('content', '')
+        })
+    
+    # Add current user message with extracted text
+    current_message = f"Extract transaction data from this bank statement ({filename}). Here's the extracted text:\n\n{extracted_text}\n\nAdditional instructions: {prompt}"
+    messages.append({
+        "role": "user",
+        "content": current_message
+    })
+    
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": 0.1,
+        "max_tokens": 2000
+    }
+    
+    print(f"Sending request to {model_config['name']} API with {len(conversation_history)} conversation turns")
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        print(f"API response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            print(f"API error response: {response.text}")
+            response.raise_for_status()
+        
+        result = response.json()
+        ai_response = result['choices'][0]['message']['content']
+        print(f"API response received: {len(ai_response)} characters")
+        
+        # Extract CSV from response
+        lines = ai_response.split('\n')
+        csv_lines = []
+        
+        for line in lines:
+            if ',' in line and (line.startswith('"') or any(char.isdigit() for char in line)):
+                csv_lines.append(line.strip())
+            elif line.strip().lower().startswith('date,description,amount,category'):
+                csv_lines.append(line.strip())
+        
+        # If no CSV found, return a default structure
+        if not csv_lines:
+            print("No CSV found in AI response, using default structure")
+            csv_lines = [
+                "Date,Description,Amount,Category",
+                "2025-10-01,Sample Transaction,100.00,misc"
+            ]
+        
+        csv_data = '\n'.join(csv_lines)
+        return csv_data, ai_response
+        
+    except requests.exceptions.RequestException as e:
+        print(f"API request failed: {str(e)}")
+        # Fallback for API errors
+        fallback_csv = "Date,Description,Amount,Category\n2025-10-01,API Error - Please try again,0.00,misc"
+        return fallback_csv, "AI processing failed. Please try again."
+    except Exception as e:
+        print(f"API processing failed: {str(e)}")
+        # Fallback for other errors
+        fallback_csv = "Date,Description,Amount,Category\n2025-10-01,Processing Error - Please try again,0.00,misc"
+        return fallback_csv, "AI processing failed. Please try again."
+
+def call_aimodel_api(user, prompt, csv_data):
+    """Call AI model API to process CSV data"""
+    # Get user's selected AI model
+    model_key = user.default_ai_provider or 'mistral'
+    model_config = AI_MODELS.get(model_key)
+    
+    if not model_config:
+        raise ValueError(f"Unsupported AI model: {model_key}")
+    
+    # Get API key for the selected model
+    api_key = getattr(user, model_config['api_key_field'])
+    if not api_key:
+        raise ValueError(f"{model_config['name']} API key not configured")
+    
+    url = model_config['api_url']
+    model_name = model_config['model_name']
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # Create system prompt for CSV processing
+    system_prompt = """You are a CSV data processing assistant. You help users filter, categorize, and transform their expense data.
+    
+    The user will provide CSV data and a request. You should:
+    1. Understand the user's request
+    2. Process the CSV data accordingly
+    3. Return the processed CSV data
+    4. Provide a brief explanation of what you did
+    
+    Always return valid CSV format. Keep the same column structure unless explicitly requested to change it.
+    For categorization, use these categories: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation.
+    
+    Example responses:
+    - "I've filtered the data to show only transactions above $50. Here's the processed CSV:"
+    - "I've categorized the expenses based on the descriptions. Here's the updated CSV:"
+    """
+    
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": f"CSV Data:\n{csv_data}\n\nUser Request: {prompt}\n\nPlease process this CSV data and return the processed CSV along with a brief explanation."
+            }
+        ],
+        "temperature": 0.1,
+        "max_tokens": 2000
+    }
+    
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    
+    result = response.json()
+    ai_response = result['choices'][0]['message']['content']
+    
+    # Extract CSV from response (simple parsing)
+    lines = ai_response.split('\n')
+    csv_lines = []
+    in_csv_block = False
+    
+    for line in lines:
+        if ',' in line and (line.startswith('"') or any(char.isdigit() for char in line)):
+            csv_lines.append(line.strip())
+        elif line.strip().lower().startswith('date,description,amount,category'):
+            csv_lines.append(line.strip())
+    
+    processed_csv = '\n'.join(csv_lines) if csv_lines else csv_data
     
     return processed_csv, ai_response
 

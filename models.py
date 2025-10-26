@@ -19,6 +19,10 @@ class User(db.Model):
     profile_picture = db.Column(db.String(500))
     password_hash = db.Column(db.String(255))
     mistral_api_key = db.Column(db.String(255))
+    openai_api_key = db.Column(db.String(255))
+    anthropic_api_key = db.Column(db.String(255))
+    deepseek_api_key = db.Column(db.String(255))
+    default_ai_provider = db.Column(db.String(50), default='mistral')  # 'mistral', 'openai', 'anthropic', 'deepseek'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -169,3 +173,55 @@ class UserDashboardSettings(db.Model):
     
     # Unique constraint - one setting per user per dashboard
     __table_args__ = (db.UniqueConstraint('user_id', 'dashboard_id', name='unique_user_dashboard_settings'),)
+
+class PDFExtraction(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    extraction_id = db.Column(db.String(255), unique=True, nullable=False)  # UUID for frontend reference
+    filename = db.Column(db.String(255), nullable=False)
+    extracted_text = db.Column(db.Text)  # Large text content from PDF
+    current_csv_data = db.Column(db.Text)  # Latest CSV data from AI processing
+    conversation_history = db.Column(db.Text)  # JSON string of conversation history (last 5 turns)
+    status = db.Column(db.String(50), default='processing')  # 'processing', 'completed', 'failed'
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    dashboard = db.relationship('Dashboard')
+    user = db.relationship('User')
+    
+    # Index for faster lookups
+    __table_args__ = (db.Index('idx_extraction_id', 'extraction_id'),)
+    
+    def get_conversation_history(self):
+        """Get conversation history as Python list"""
+        if self.conversation_history:
+            return json.loads(self.conversation_history)
+        return []
+    
+    def add_message(self, role, content, csv_data=None):
+        """Add a message to conversation history (limit to 5 turns)"""
+        history = self.get_conversation_history()
+        
+        # Add new message
+        message = {
+            'role': role,
+            'content': content,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        if csv_data:
+            message['csv_data'] = csv_data
+        
+        history.append(message)
+        
+        # Keep only last 5 turns
+        if len(history) > 5:
+            history = history[-5:]
+        
+        self.conversation_history = json.dumps(history)
+    
+    def update_csv_data(self, csv_data):
+        """Update current CSV data"""
+        self.current_csv_data = csv_data
+        self.updated_at = datetime.utcnow()

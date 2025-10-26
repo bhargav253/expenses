@@ -16,22 +16,391 @@ class DashboardManager {
     }
 
     setupPdfProcessing() {
-        const pdfFileInput = document.getElementById('pdfFile');
-        if (pdfFileInput) {
-            pdfFileInput.addEventListener('change', this.handlePdfUpload.bind(this));
-        }
-
+        // Setup two option layout
+        this.setupOptionSelection();
+        
         // Setup Google Sheets paste functionality
         const processSheetsBtn = document.getElementById('processSheetsData');
-        const sheetsPasteArea = document.getElementById('sheetsPasteArea');
+        const sheetsPasteText = document.getElementById('sheetsPasteText');
+        const cancelSheetsBtn = document.getElementById('cancelSheets');
         
-        if (processSheetsBtn && sheetsPasteArea) {
+        if (processSheetsBtn && sheetsPasteText) {
             processSheetsBtn.addEventListener('click', this.handleSheetsPaste.bind(this));
-            sheetsPasteArea.addEventListener('paste', this.handleSheetsPaste.bind(this));
+            sheetsPasteText.addEventListener('paste', this.handleSheetsPaste.bind(this));
         }
+        
+        if (cancelSheetsBtn) {
+            cancelSheetsBtn.addEventListener('click', () => this.cancelOption('sheets'));
+        }
+        
+        // Setup AI file upload
+        const aiFileInput = document.getElementById('aiFileInput');
+        const cancelAIBtn = document.getElementById('cancelAI');
+        
+        if (aiFileInput) {
+            aiFileInput.addEventListener('change', this.handleAIUpload.bind(this));
+        }
+        
+        if (cancelAIBtn) {
+            cancelAIBtn.addEventListener('click', () => this.cancelOption('ai'));
+        }
+    }
+    
+    setupOptionSelection() {
+        const optionCards = document.querySelectorAll('.option-card');
+        optionCards.forEach(card => {
+            const button = card.querySelector('button');
+            button.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const option = card.getAttribute('data-option');
+                this.selectOption(option);
+            });
+            
+            // Also allow clicking the entire card
+            card.addEventListener('click', (e) => {
+                if (e.target.tagName !== 'BUTTON') {
+                    const option = card.getAttribute('data-option');
+                    this.selectOption(option);
+                }
+            });
+        });
+    }
+    
+    selectOption(option) {
+        console.log('Selected option:', option);
+        
+        // Hide all option cards
+        const optionCards = document.querySelectorAll('.option-card');
+        optionCards.forEach(card => {
+            card.classList.add('d-none');
+        });
+        
+        // Show the selected option interface
+        if (option === 'sheets') {
+            this.showSheetsInterface();
+        } else if (option === 'ai') {
+            this.showAIInterface();
+        }
+    }
+    
+    showSheetsInterface() {
+        const sheetsPasteArea = document.getElementById('sheetsPasteArea');
+        sheetsPasteArea.classList.remove('d-none');
+    }
+    
+    showAIInterface() {
+        const aiUploadArea = document.getElementById('aiUploadArea');
+        aiUploadArea.classList.remove('d-none');
+    }
+    
+    cancelOption(option) {
+        // Hide the current option interface
+        if (option === 'sheets') {
+            const sheetsPasteArea = document.getElementById('sheetsPasteArea');
+            sheetsPasteArea.classList.add('d-none');
+            const sheetsPasteText = document.getElementById('sheetsPasteText');
+            sheetsPasteText.value = '';
+        } else if (option === 'ai') {
+            const aiUploadArea = document.getElementById('aiUploadArea');
+            aiUploadArea.classList.add('d-none');
+            const aiFileInput = document.getElementById('aiFileInput');
+            aiFileInput.value = '';
+        }
+        
+        // Show all option cards again
+        const optionCards = document.querySelectorAll('.option-card');
+        optionCards.forEach(card => {
+            card.classList.remove('d-none');
+        });
+        
+        // Clear current data
+        this.currentFile = null;
+        this.currentFileType = null;
+        this.currentCsvData = null;
+    }
+    
+    async handleAIUpload(event) {
+        const file = event.target.files[0];
+        if (!file) {
+            // User clicked the AI card but hasn't selected a file yet
+            // Just show the upload interface and wait for file selection
+            return;
+        }
+        
+        const fileType = this.detectFileType(file);
+        console.log('AI processing - File type detected:', fileType);
+        
+        if (!fileType) {
+            Utils.showNotification('Unsupported file type. Please upload CSV, Excel, or PDF files only.', 'warning');
+            return;
+        }
+        
+        // Clear chat box when new file is uploaded
+        this.clearAiChat();
+        
+        // Clear localStorage for this dashboard when new file is uploaded
+        const localStorageKey = `pdf_extraction_${this.dashboardId}`;
+        localStorage.removeItem(localStorageKey);
+        console.log('Cleared localStorage for new file upload:', localStorageKey);
+        
+        // Store file info for later processing
+        this.currentFile = file;
+        this.currentFileType = fileType;
+        
+        // Add file upload message to chat
+        this.addAiChatMessage('user', `Uploaded file: ${file.name} (${fileType.toUpperCase()})`);
+        
+        // For CSV files, we can load them immediately for preview
+        if (fileType === 'csv') {
+            await this.processCsvWithAI(file);
+        } else if (fileType === 'excel') {
+            // For Excel files, wait for user prompt before extraction
+            this.addAiChatMessage('assistant', `I've received your Excel file. Please tell me what you'd like me to extract from it. For example: "Extract all transactions", "Find expenses over $50", or "Categorize the spending".`);
+        } else if (fileType === 'pdf') {
+            // For PDF files, wait for user prompt before extraction
+            this.addAiChatMessage('assistant', `I've received your PDF file. Please tell me what you'd like me to extract from it. For example: "Extract all transactions", "Find expenses over $50", or "Categorize the spending".`);
+        }
+    }
+    
+    async processCsvWithAI(file) {
+        try {
+            const csvText = await this.readFileAsText(file);
+            this.currentCsvData = csvText;
+            
+            // Add CSV data to chat context
+            this.addAiChatMessage('assistant', `I've loaded your CSV file. You can now ask me to process this data. For example: "Filter only transactions above $50", "Categorize expenses", or "Remove duplicate entries".`);
+            
+            // Show CSV preview
+            this.showCsvPreview(csvText);
+            
+        } catch (error) {
+            console.error('CSV processing error:', error);
+            this.addAiChatMessage('assistant', 'Sorry, I encountered an error processing your CSV file. Please try again.');
+        }
+    }
+    
+    setupMethodSelection() {
+        const methodCards = document.querySelectorAll('.method-card');
+        methodCards.forEach(card => {
+            const button = card.querySelector('button');
+            button.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const method = card.getAttribute('data-method');
+                this.selectProcessingMethod(method);
+            });
+            
+            // Also allow clicking the entire card
+            card.addEventListener('click', (e) => {
+                if (e.target.tagName !== 'BUTTON') {
+                    const method = card.getAttribute('data-method');
+                    this.selectProcessingMethod(method);
+                }
+            });
+        });
+    }
+    
+    async handleUnifiedUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        const fileType = this.detectFileType(file);
+        console.log('File type detected:', fileType);
+        
+        if (!fileType) {
+            Utils.showNotification('Unsupported file type. Please upload CSV or PDF files only.', 'warning');
+            return;
+        }
+        
+        // Store file info for later processing
+        this.currentFile = file;
+        this.currentFileType = fileType;
+        
+        // Show method selection
+        this.showMethodSelection(fileType);
+    }
+    
+    detectFileType(file) {
+        const fileName = file.name.toLowerCase();
+        const fileExtension = fileName.split('.').pop();
+        
+        if (fileExtension === 'csv' || file.type === 'text/csv') {
+            return 'csv';
+        } else if (fileExtension === 'pdf' || file.type === 'application/pdf') {
+            return 'pdf';
+        } else if (fileExtension === 'xlsx' || fileExtension === 'xls' || 
+                   file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+                   file.type === 'application/vnd.ms-excel') {
+            return 'excel';
+        }
+        
+        return null;
+    }
+    
+    showMethodSelection(fileType) {
+        const uploadArea = document.getElementById('unifiedUploadArea');
+        const methodSelectionArea = document.getElementById('methodSelectionArea');
+        
+        uploadArea.classList.add('d-none');
+        methodSelectionArea.classList.remove('d-none');
+        
+        // Update method cards based on file type
+        this.updateMethodCardsForFileType(fileType);
+    }
+    
+    updateMethodCardsForFileType(fileType) {
+        const aiCard = document.querySelector('.method-card[data-method="ai"]');
+        const rulesCard = document.querySelector('.method-card[data-method="rules"]');
+        
+        if (fileType === 'csv') {
+            // For CSV files, both methods are available
+            aiCard.querySelector('h6').textContent = 'AI Processing';
+            aiCard.querySelector('p').textContent = 'Use AI to automatically categorize and transform your CSV data';
+            
+            rulesCard.querySelector('h6').textContent = 'Rule-Based Processing';
+            rulesCard.querySelector('p').textContent = 'Use structured commands to filter and transform your CSV data';
+        } else if (fileType === 'pdf') {
+            // For PDF files, emphasize extraction
+            aiCard.querySelector('h6').textContent = 'AI Extraction';
+            aiCard.querySelector('p').textContent = 'Use AI to automatically extract tables from your PDF';
+            
+            rulesCard.querySelector('h6').textContent = 'Rule-Based Extraction';
+            rulesCard.querySelector('p').textContent = 'Use structured commands to extract specific pages and columns';
+        }
+    }
+    
+    async selectProcessingMethod(method) {
+        console.log('Selected processing method:', method, 'for file type:', this.currentFileType);
+        
+        const methodSelectionArea = document.getElementById('methodSelectionArea');
+        methodSelectionArea.classList.add('d-none');
+        
+        if (method === 'ai') {
+            await this.processWithAI();
+        } else if (method === 'rules') {
+            await this.processWithRules();
+        }
+    }
+    
+    async processWithAI() {
+        if (!this.currentFile) {
+            Utils.showNotification('No file selected', 'warning');
+            return;
+        }
+        
+        const processingArea = document.getElementById('processingArea');
+        const progressBar = processingArea.querySelector('.progress-bar');
+        
+        processingArea.classList.remove('d-none');
+        progressBar.style.width = '25%';
+        
+        try {
+            if (this.currentFileType === 'csv') {
+                // Process CSV with AI
+                const csvText = await this.readFileAsText(this.currentFile);
+                this.currentCsvData = csvText;
+                progressBar.style.width = '100%';
+                this.showCsvPreview(csvText);
+                Utils.showNotification('CSV file loaded successfully', 'success');
+                
+            } else if (this.currentFileType === 'pdf') {
+                // Process PDF with AI directly
+                await this.processPdfWithAI(this.currentFile);
+            }
+            
+        } catch (error) {
+            console.error('AI processing error:', error);
+            Utils.showNotification('Error processing file with AI', 'danger');
+            this.resetUploadUI();
+        }
+    }
+    
+    async processPdfWithAI(file) {
+        try {
+            const processingArea = document.getElementById('processingArea');
+            const progressBar = processingArea.querySelector('.progress-bar');
+
+            // Show processing UI
+            processingArea.classList.remove('d-none');
+
+            // Convert PDF to base64 for AI processing - use a safer method
+            const arrayBuffer = await file.arrayBuffer();
+            
+            // Use a safer method to convert array buffer to base64
+            let base64Pdf = '';
+            const bytes = new Uint8Array(arrayBuffer);
+            const chunkSize = 8192; // Process in chunks to avoid argument limits
+            
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                const chunk = bytes.subarray(i, i + chunkSize);
+                base64Pdf += String.fromCharCode.apply(null, chunk);
+            }
+            
+            base64Pdf = btoa(base64Pdf);
+            
+            // Show processing status
+            progressBar.style.width = '50%';
+            
+            // Send PDF to AI for extraction - use direct fetch to avoid argument issues
+            const response = await fetch(`/api/dashboard/${this.dashboardId}/ai/extract-pdf`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    pdf_data: base64Pdf,
+                    filename: file.name
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            // Update progress
+            progressBar.style.width = '100%';
+            
+            if (result.csv_data) {
+                this.currentCsvData = result.csv_data;
+                this.showCsvPreview(result.csv_data);
+                Utils.showNotification('PDF processed successfully using AI', 'success');
+            } else {
+                throw new Error('No CSV data returned from AI');
+            }
+            
+        } catch (error) {
+            console.error('PDF processing error:', error);
+            Utils.showNotification('Error processing PDF with AI. Please try again or use Google Sheets copy instead.', 'danger');
+            this.resetUploadUI();
+        }
+    }
+    
+    
+    readFileAsText(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.onerror = (e) => reject(e);
+            reader.readAsText(file);
+        });
     }
 
     setupAiChat() {
+        // Setup the new AI chat interface
+        const sendAiMessageBtn = document.getElementById('sendAiMessage');
+        const aiChatInput = document.getElementById('aiChatInput');
+        
+        if (sendAiMessageBtn && aiChatInput) {
+            sendAiMessageBtn.addEventListener('click', this.sendAiChatMessage.bind(this));
+            aiChatInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    this.sendAiChatMessage();
+                }
+            });
+        }
+
+        // Setup the old AI chat interface (for backward compatibility)
         const sendMessageBtn = document.getElementById('sendMessage');
         const chatInput = document.getElementById('chatInput');
         
@@ -44,9 +413,352 @@ class DashboardManager {
             });
         }
 
-        const startAiBtn = document.getElementById('startAiProcessing');
-        if (startAiBtn) {
-            startAiBtn.addEventListener('click', this.startAiProcessing.bind(this));
+    }
+    
+    addAiChatMessage(role, content) {
+        const chatMessages = document.getElementById('aiChatMessages');
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `chat-message ${role} mb-2`;
+        messageDiv.innerHTML = `<strong>${role === 'user' ? 'You' : 'AI Assistant'}:</strong> ${content}`;
+        chatMessages.appendChild(messageDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+    
+    clearAiChat() {
+        const chatMessages = document.getElementById('aiChatMessages');
+        if (chatMessages) {
+            chatMessages.innerHTML = '';
+        }
+    }
+    
+    async sendAiChatMessage() {
+        const aiChatInput = document.getElementById('aiChatInput');
+        const message = aiChatInput.value.trim();
+        
+        if (!message) return;
+        
+        // Add user message to chat
+        this.addAiChatMessage('user', message);
+        aiChatInput.value = '';
+        
+        // Show loading state
+        const sendBtn = document.getElementById('sendAiMessage');
+        Utils.showLoading(sendBtn);
+        
+        try {
+            // Check if we have a file to process
+            if (this.currentFile && this.currentFileType === 'pdf') {
+                // Process PDF with conversational AI
+                await this.processPdfWithConversation(this.currentFile, message);
+            } else if (this.currentFile && this.currentFileType === 'excel') {
+                // Process Excel with AI using the user's prompt
+                await this.processExcelWithPrompt(this.currentFile, message);
+            } else if (this.currentCsvData) {
+                // Process CSV with AI
+                await this.processCsvWithPrompt(message);
+            } else {
+                // No data available yet
+                this.addAiChatMessage('assistant', 'Please upload a file first before sending processing requests.');
+            }
+            
+        } catch (error) {
+            console.error('AI chat processing error:', error);
+            this.addAiChatMessage('assistant', 'Sorry, I encountered an error processing your request. Please try again.');
+        } finally {
+            Utils.hideLoading(sendBtn);
+        }
+    }
+    
+    async processPdfWithConversation(file, prompt) {
+        try {
+            // Check if we already have an extraction_id for this file
+            const localStorageKey = `pdf_extraction_${this.dashboardId}`;
+            const storedState = localStorage.getItem(localStorageKey);
+            
+            let extractionId;
+            
+            if (storedState) {
+                const state = JSON.parse(storedState);
+                // Check if the stored filename matches the current file
+                if (state.filename === file.name) {
+                    extractionId = state.extraction_id;
+                    console.log('Using existing extraction_id from localStorage:', extractionId);
+                } else {
+                    // Different file, clear old state
+                    localStorage.removeItem(localStorageKey);
+                    console.log('New file detected, clearing old extraction state');
+                }
+            }
+            
+            if (!extractionId) {
+                // Show processing status in chat
+                this.addAiChatMessage('assistant', 'Processing PDF extraction...');
+                
+                // Convert PDF to base64 for extraction
+                const arrayBuffer = await file.arrayBuffer();
+                
+                // Use a safer method to convert array buffer to base64
+                let base64Pdf = '';
+                const bytes = new Uint8Array(arrayBuffer);
+                const chunkSize = 8192; // Process in chunks to avoid argument limits
+                
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                    const chunk = bytes.subarray(i, i + chunkSize);
+                    base64Pdf += String.fromCharCode.apply(null, chunk);
+                }
+                
+                base64Pdf = btoa(base64Pdf);
+                
+                // Step 1: Extract PDF text using the new endpoint (no AI processing)
+                const extractResponse = await fetch(`/api/dashboard/${this.dashboardId}/ai/extract-pdf`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        pdf_data: base64Pdf,
+                        filename: file.name
+                    })
+                });
+                
+                if (!extractResponse.ok) {
+                    throw new Error(`PDF extraction failed: ${extractResponse.status}`);
+                }
+                
+                const extractResult = await extractResponse.json();
+                
+                if (!extractResult.extraction_id) {
+                    throw new Error('PDF extraction failed - no extraction ID returned');
+                }
+                
+                extractionId = extractResult.extraction_id;
+                
+                // Store extraction_id in localStorage for future requests
+                localStorage.setItem(localStorageKey, JSON.stringify({
+                    extraction_id: extractionId,
+                    filename: file.name,
+                    dashboard_id: this.dashboardId
+                }));
+                
+                console.log('PDF extraction completed, stored extraction_id:', extractionId);
+            } else {
+                console.log('Using existing extraction_id for chat:', extractionId);
+            }
+            
+            // Step 2: Process chat with the extraction_id
+            const chatResponse = await fetch(`/api/dashboard/${this.dashboardId}/ai/process-chat`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    prompt: prompt,
+                    extraction_id: extractionId
+                })
+            });
+            
+            if (!chatResponse.ok) {
+                // If extraction_id is invalid, clear localStorage and restart
+                if (chatResponse.status === 400) {
+                    localStorage.removeItem(localStorageKey);
+                    this.addAiChatMessage('assistant', 'Conversation state lost. Please upload the PDF again.');
+                    return;
+                }
+                throw new Error(`AI processing failed: ${chatResponse.status}`);
+            }
+            
+            const chatResult = await chatResponse.json();
+            
+            if (chatResult.csv_data) {
+                this.currentCsvData = chatResult.csv_data;
+                this.addAiChatMessage('assistant', chatResult.message || 'I\'ve processed your request. Here\'s the updated CSV:');
+                this.showCsvPreview(chatResult.csv_data);
+                Utils.showNotification('PDF processed successfully using conversational AI', 'success');
+            } else {
+                throw new Error('No CSV data returned from AI');
+            }
+            
+        } catch (error) {
+            console.error('PDF conversational processing error:', error);
+            this.addAiChatMessage('assistant', 'Error processing PDF with AI. Please try again.');
+            this.resetUploadUI();
+        }
+    }
+    
+    getConversationHistory() {
+        const chatMessages = document.getElementById('aiChatMessages');
+        const messages = chatMessages.querySelectorAll('.chat-message');
+        const history = [];
+        
+        messages.forEach(message => {
+            const role = message.classList.contains('user') ? 'user' : 'assistant';
+            const content = message.textContent.replace(/^(You|AI Assistant):\s*/, '');
+            history.push({
+                role: role,
+                content: content
+            });
+        });
+        
+        return history;
+    }
+
+    async processPdfWithPrompt(file, prompt) {
+        try {
+            const processingArea = document.getElementById('processingArea');
+            const progressBar = processingArea.querySelector('.progress-bar');
+
+            // Show processing UI
+            processingArea.classList.remove('d-none');
+
+            // Convert PDF to base64 for AI processing
+            const arrayBuffer = await file.arrayBuffer();
+            
+            // Use a safer method to convert array buffer to base64
+            let base64Pdf = '';
+            const bytes = new Uint8Array(arrayBuffer);
+            const chunkSize = 8192; // Process in chunks to avoid argument limits
+            
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                const chunk = bytes.subarray(i, i + chunkSize);
+                base64Pdf += String.fromCharCode.apply(null, chunk);
+            }
+            
+            base64Pdf = btoa(base64Pdf);
+            
+            // Show processing status
+            progressBar.style.width = '50%';
+            
+            // Send PDF to AI for extraction with prompt
+            const response = await fetch(`/api/dashboard/${this.dashboardId}/ai/extract-pdf`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    pdf_data: base64Pdf,
+                    filename: file.name,
+                    prompt: prompt
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            // Update progress
+            progressBar.style.width = '100%';
+            
+            if (result.csv_data) {
+                this.currentCsvData = result.csv_data;
+                this.addAiChatMessage('assistant', 'I\'ve extracted the data from your PDF. Here\'s the processed CSV:');
+                this.showCsvPreview(result.csv_data);
+                Utils.showNotification('PDF processed successfully using AI', 'success');
+            } else {
+                throw new Error('No CSV data returned from AI');
+            }
+            
+        } catch (error) {
+            console.error('PDF processing error:', error);
+            this.addAiChatMessage('assistant', 'Error processing PDF with AI. Please try again.');
+            this.resetUploadUI();
+        }
+    }
+    
+    async processExcelWithPrompt(file, prompt) {
+        try {
+            const processingArea = document.getElementById('processingArea');
+            const progressBar = processingArea.querySelector('.progress-bar');
+
+            // Show processing UI
+            processingArea.classList.remove('d-none');
+
+            // Convert Excel to base64 for AI processing
+            const arrayBuffer = await file.arrayBuffer();
+            
+            // Use a safer method to convert array buffer to base64
+            let base64Excel = '';
+            const bytes = new Uint8Array(arrayBuffer);
+            const chunkSize = 8192; // Process in chunks to avoid argument limits
+            
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                const chunk = bytes.subarray(i, i + chunkSize);
+                base64Excel += String.fromCharCode.apply(null, chunk);
+            }
+            
+            base64Excel = btoa(base64Excel);
+            
+            // Show processing status
+            progressBar.style.width = '50%';
+            
+            // Send Excel to AI for extraction with prompt
+            const response = await fetch(`/api/dashboard/${this.dashboardId}/ai/extract-excel`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    excel_data: base64Excel,
+                    filename: file.name,
+                    prompt: prompt
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            // Update progress
+            progressBar.style.width = '100%';
+            
+            if (result.csv_data) {
+                this.currentCsvData = result.csv_data;
+                this.addAiChatMessage('assistant', 'I\'ve extracted the data from your Excel file. Here\'s the processed CSV:');
+                this.showCsvPreview(result.csv_data);
+                Utils.showNotification('Excel file processed successfully using AI', 'success');
+            } else {
+                throw new Error('No CSV data returned from AI');
+            }
+            
+        } catch (error) {
+            console.error('Excel processing error:', error);
+            this.addAiChatMessage('assistant', 'Error processing Excel with AI. Please try again.');
+            this.resetUploadUI();
+        }
+    }
+    
+    async processCsvWithPrompt(prompt) {
+        try {
+            if (!this.currentSessionId) {
+                // Create AI session first
+                const response = await ApiClient.ai.createSession(this.dashboardId, this.currentCsvData);
+                this.currentSessionId = response.session_id;
+            }
+            
+            // Send to AI API with current CSV data
+            const response = await ApiClient.ai.processCsv(
+                this.dashboardId,
+                this.currentSessionId,
+                prompt,
+                this.currentCsvData
+            );
+            
+            // Add AI response
+            this.addAiChatMessage('assistant', response.message);
+            
+            // Update CSV preview if new data is provided
+            if (response.processed_csv) {
+                this.currentCsvData = response.processed_csv;
+                this.showCsvPreview(response.processed_csv);
+                this.showEditableCsvTable(response.processed_csv);
+            }
+            
+        } catch (error) {
+            console.error('AI processing error:', error);
+            this.addAiChatMessage('assistant', 'Sorry, I encountered an error processing your request. Please try again.');
         }
     }
 
@@ -113,44 +825,37 @@ class DashboardManager {
             return;
         }
 
-        const uploadArea = document.getElementById('pdfUploadArea');
         const processingArea = document.getElementById('processingArea');
         const progressBar = processingArea.querySelector('.progress-bar');
 
         // Show processing UI
-        uploadArea.classList.add('d-none');
         processingArea.classList.remove('d-none');
 
         try {
-            // Set PDF.js worker
-            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
-
-            // Load PDF
+            // Convert PDF to base64 for AI processing
             const arrayBuffer = await file.arrayBuffer();
-            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            const base64Pdf = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
             
-            let extractedText = '';
+            // Show processing status
+            progressBar.style.width = '50%';
             
-            // Extract text from each page
-            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-                progressBar.style.width = `${(pageNum / pdf.numPages) * 100}%`;
-                
-                const page = await pdf.getPage(pageNum);
-                const textContent = await page.getTextContent();
-                const pageText = textContent.items.map(item => item.str).join(' ');
-                extractedText += pageText + '\n';
+            // Send PDF to AI for extraction
+            const response = await ApiClient.ai.extractFromPdf(this.dashboardId, base64Pdf, file.name);
+            
+            // Update progress
+            progressBar.style.width = '100%';
+            
+            if (response.csv_data) {
+                this.currentCsvData = response.csv_data;
+                this.showCsvPreview(response.csv_data);
+                Utils.showNotification('PDF processed successfully using AI', 'success');
+            } else {
+                throw new Error('No CSV data returned from AI');
             }
-
-            // Process extracted text to CSV
-            const csvData = this.extractTablesFromText(extractedText);
-            this.currentCsvData = csvData;
-            
-            // Show CSV preview
-            this.showCsvPreview(csvData);
             
         } catch (error) {
             console.error('PDF processing error:', error);
-            Utils.showNotification('Error processing PDF file', 'danger');
+            Utils.showNotification('Error processing PDF with AI. Please try again or use Google Sheets copy instead.', 'danger');
             this.resetUploadUI();
         }
     }
@@ -343,31 +1048,7 @@ class DashboardManager {
         }
     }
 
-    async startAiProcessing() {
-        if (!this.currentCsvData) {
-            Utils.showNotification('No CSV data available', 'warning');
-            return;
-        }
-
-        try {
-            // Create AI session
-            const response = await ApiClient.ai.createSession(this.dashboardId, this.currentCsvData);
-            this.currentSessionId = response.session_id;
-            
-            // Show AI chat interface
-            const aiChatCard = document.getElementById('aiChatCard');
-            aiChatCard.classList.remove('d-none');
-            
-            // Add welcome message
-            this.addChatMessage('assistant', 'Hello! I can help you process your expense data. Tell me what you\'d like to do - for example: "Filter only transactions above $50", "Categorize expenses", or "Remove duplicate entries".');
-            
-            Utils.showNotification('AI session started. You can now chat with the assistant.', 'success');
-            
-        } catch (error) {
-            console.error('AI session creation error:', error);
-            Utils.showNotification('Failed to start AI session. Please check your API key in settings.', 'danger');
-        }
-    }
+    // startAiProcessing method removed - chat interface handles continuous processing
 
     async sendAiMessage() {
         const chatInput = document.getElementById('chatInput');
@@ -1753,18 +2434,35 @@ class DashboardManager {
     }
 
     resetUploadUI() {
-        const uploadArea = document.getElementById('pdfUploadArea');
+        const optionCards = document.querySelectorAll('.option-card');
+        const sheetsPasteArea = document.getElementById('sheetsPasteArea');
+        const aiUploadArea = document.getElementById('aiUploadArea');
         const processingArea = document.getElementById('processingArea');
         const csvPreviewArea = document.getElementById('csvPreviewArea');
-        const pdfFileInput = document.getElementById('pdfFile');
+        const aiChatCard = document.getElementById('aiChatCard');
         
-        uploadArea.classList.remove('d-none');
-        processingArea.classList.add('d-none');
-        csvPreviewArea.classList.add('d-none');
+        // Reset all UI elements
+        optionCards.forEach(card => {
+            card.classList.remove('d-none');
+        });
+        if (sheetsPasteArea) sheetsPasteArea.classList.add('d-none');
+        if (aiUploadArea) aiUploadArea.classList.add('d-none');
+        if (processingArea) processingArea.classList.add('d-none');
+        if (csvPreviewArea) csvPreviewArea.classList.add('d-none');
+        if (aiChatCard) aiChatCard.classList.add('d-none');
         
-        if (pdfFileInput) {
-            pdfFileInput.value = '';
-        }
+        // Clear file inputs
+        const sheetsPasteText = document.getElementById('sheetsPasteText');
+        const aiFileInput = document.getElementById('aiFileInput');
+        
+        if (sheetsPasteText) sheetsPasteText.value = '';
+        if (aiFileInput) aiFileInput.value = '';
+        
+        // Clear current data
+        this.currentFile = null;
+        this.currentFileType = null;
+        this.currentCsvData = null;
+        this.currentSessionId = null;
     }
 }
 
