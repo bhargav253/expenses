@@ -271,33 +271,6 @@ body {
     color: var(--splitwise-green);
 }
 
-/* Chat interface styling - Splitwise style */
-#chatMessages {
-    background: var(--splitwise-gray);
-    border-radius: 8px;
-    padding: 1rem;
-    border: 1px solid var(--splitwise-border);
-}
-
-.chat-message {
-    margin-bottom: 1rem;
-    padding: 0.75rem 1rem;
-    border-radius: 8px;
-    max-width: 85%;
-    font-size: 0.9rem;
-}
-
-.chat-message.user {
-    background: var(--splitwise-green);
-    color: white;
-    margin-left: auto;
-}
-
-.chat-message.assistant {
-    background: white;
-    color: var(--splitwise-text);
-    border: 1px solid var(--splitwise-border);
-}
 
 /* Dashboard Layout */
 .dashboard-container {
@@ -364,11 +337,6 @@ body {
     }
     
     .table-responsive {
-        font-size: 0.85rem;
-    }
-    
-    .chat-message {
-        max-width: 90%;
         font-size: 0.85rem;
     }
     

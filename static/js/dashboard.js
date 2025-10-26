@@ -179,45 +179,6 @@ class DashboardManager {
         }
     }
     
-    setupMethodSelection() {
-        const methodCards = document.querySelectorAll('.method-card');
-        methodCards.forEach(card => {
-            const button = card.querySelector('button');
-            button.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const method = card.getAttribute('data-method');
-                this.selectProcessingMethod(method);
-            });
-            
-            // Also allow clicking the entire card
-            card.addEventListener('click', (e) => {
-                if (e.target.tagName !== 'BUTTON') {
-                    const method = card.getAttribute('data-method');
-                    this.selectProcessingMethod(method);
-                }
-            });
-        });
-    }
-    
-    async handleUnifiedUpload(event) {
-        const file = event.target.files[0];
-        if (!file) return;
-        
-        const fileType = this.detectFileType(file);
-        console.log('File type detected:', fileType);
-        
-        if (!fileType) {
-            Utils.showNotification('Unsupported file type. Please upload CSV or PDF files only.', 'warning');
-            return;
-        }
-        
-        // Store file info for later processing
-        this.currentFile = file;
-        this.currentFileType = fileType;
-        
-        // Show method selection
-        this.showMethodSelection(fileType);
-    }
     
     detectFileType(file) {
         const fileName = file.name.toLowerCase();
@@ -236,83 +197,6 @@ class DashboardManager {
         return null;
     }
     
-    showMethodSelection(fileType) {
-        const uploadArea = document.getElementById('unifiedUploadArea');
-        const methodSelectionArea = document.getElementById('methodSelectionArea');
-        
-        uploadArea.classList.add('d-none');
-        methodSelectionArea.classList.remove('d-none');
-        
-        // Update method cards based on file type
-        this.updateMethodCardsForFileType(fileType);
-    }
-    
-    updateMethodCardsForFileType(fileType) {
-        const aiCard = document.querySelector('.method-card[data-method="ai"]');
-        const rulesCard = document.querySelector('.method-card[data-method="rules"]');
-        
-        if (fileType === 'csv') {
-            // For CSV files, both methods are available
-            aiCard.querySelector('h6').textContent = 'AI Processing';
-            aiCard.querySelector('p').textContent = 'Use AI to automatically categorize and transform your CSV data';
-            
-            rulesCard.querySelector('h6').textContent = 'Rule-Based Processing';
-            rulesCard.querySelector('p').textContent = 'Use structured commands to filter and transform your CSV data';
-        } else if (fileType === 'pdf') {
-            // For PDF files, emphasize extraction
-            aiCard.querySelector('h6').textContent = 'AI Extraction';
-            aiCard.querySelector('p').textContent = 'Use AI to automatically extract tables from your PDF';
-            
-            rulesCard.querySelector('h6').textContent = 'Rule-Based Extraction';
-            rulesCard.querySelector('p').textContent = 'Use structured commands to extract specific pages and columns';
-        }
-    }
-    
-    async selectProcessingMethod(method) {
-        console.log('Selected processing method:', method, 'for file type:', this.currentFileType);
-        
-        const methodSelectionArea = document.getElementById('methodSelectionArea');
-        methodSelectionArea.classList.add('d-none');
-        
-        if (method === 'ai') {
-            await this.processWithAI();
-        } else if (method === 'rules') {
-            await this.processWithRules();
-        }
-    }
-    
-    async processWithAI() {
-        if (!this.currentFile) {
-            Utils.showNotification('No file selected', 'warning');
-            return;
-        }
-        
-        const processingArea = document.getElementById('processingArea');
-        const progressBar = processingArea.querySelector('.progress-bar');
-        
-        processingArea.classList.remove('d-none');
-        progressBar.style.width = '25%';
-        
-        try {
-            if (this.currentFileType === 'csv') {
-                // Process CSV with AI
-                const csvText = await this.readFileAsText(this.currentFile);
-                this.currentCsvData = csvText;
-                progressBar.style.width = '100%';
-                this.showCsvPreview(csvText);
-                Utils.showNotification('CSV file loaded successfully', 'success');
-                
-            } else if (this.currentFileType === 'pdf') {
-                // Process PDF with AI directly
-                await this.processPdfWithAI(this.currentFile);
-            }
-            
-        } catch (error) {
-            console.error('AI processing error:', error);
-            Utils.showNotification('Error processing file with AI', 'danger');
-            this.resetUploadUI();
-        }
-    }
     
     async processPdfWithAI(file) {
         try {
@@ -399,20 +283,6 @@ class DashboardManager {
                 }
             });
         }
-
-        // Setup the old AI chat interface (for backward compatibility)
-        const sendMessageBtn = document.getElementById('sendMessage');
-        const chatInput = document.getElementById('chatInput');
-        
-        if (sendMessageBtn && chatInput) {
-            sendMessageBtn.addEventListener('click', this.sendAiMessage.bind(this));
-            chatInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    this.sendAiMessage();
-                }
-            });
-        }
-
     }
     
     addAiChatMessage(role, content) {
@@ -1048,53 +918,6 @@ class DashboardManager {
         }
     }
 
-    // startAiProcessing method removed - chat interface handles continuous processing
-
-    async sendAiMessage() {
-        const chatInput = document.getElementById('chatInput');
-        const message = chatInput.value.trim();
-        
-        if (!message) return;
-        
-        if (!this.currentSessionId) {
-            Utils.showNotification('Please start AI processing first', 'warning');
-            return;
-        }
-
-        // Add user message to chat
-        this.addChatMessage('user', message);
-        chatInput.value = '';
-        
-        // Show loading state
-        const sendBtn = document.getElementById('sendMessage');
-        Utils.showLoading(sendBtn);
-        
-        try {
-            // Send to AI API with current CSV data
-            const response = await ApiClient.ai.processCsv(
-                this.dashboardId,
-                this.currentSessionId,
-                message,
-                this.currentCsvData
-            );
-            
-            // Add AI response
-            this.addChatMessage('assistant', response.message);
-            
-            // Update CSV preview if new data is provided
-            if (response.processed_csv) {
-                this.currentCsvData = response.processed_csv;
-                this.showCsvPreview(response.processed_csv);
-                this.showEditableCsvTable(response.processed_csv);
-            }
-            
-        } catch (error) {
-            console.error('AI processing error:', error);
-            this.addChatMessage('assistant', 'Sorry, I encountered an error processing your request. Please try again.');
-        } finally {
-            Utils.hideLoading(sendBtn);
-        }
-    }
 
     showEditableCsvTable(csvData) {
         const editableTableContainer = document.getElementById('editableCsvTable');
@@ -1405,14 +1228,6 @@ class DashboardManager {
         Utils.showNotification('CSV data updated. Your changes will be used in the next AI request.', 'info');
     }
 
-    addChatMessage(role, content) {
-        const chatMessages = document.getElementById('chatMessages');
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `chat-message ${role}`;
-        messageDiv.textContent = content;
-        chatMessages.appendChild(messageDiv);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
 
     initMonthlyTable(selectedMonth = null) {
         console.log('=== initMonthlyTable() called with selectedMonth:', selectedMonth, '===');
