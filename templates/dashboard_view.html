@@ -116,6 +116,14 @@
                                 </div>
                             </div>
                             
+                            <!-- Chat Input -->
+                            <div class="input-group mb-3">
+                                <input type="text" id="aiChatInput" class="form-control" placeholder="Describe what you want to do with your data...">
+                                <button class="btn btn-success" id="sendAiMessage">
+                                    <i class="fas fa-paper-plane"></i>
+                                </button>
+                            </div>
+                            
                             <!-- File Upload Area -->
                             <div class="border-dashed p-3 mb-3">
                                 <div class="d-flex align-items-center justify-content-between">
@@ -133,12 +141,32 @@
                                 </div>
                             </div>
                             
-                            <!-- Chat Input -->
-                            <div class="input-group mb-3">
-                                <input type="text" id="aiChatInput" class="form-control" placeholder="Describe what you want to do with your data...">
-                                <button class="btn btn-success" id="sendAiMessage">
-                                    <i class="fas fa-paper-plane"></i>
-                                </button>
+                            <!-- PDF Extraction Options -->
+                            <div class="card mb-3">
+                                <div class="card-header bg-light">
+                                    <h6 class="mb-0"><i class="fas fa-cog me-2"></i>PDF Extraction Settings</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <label for="pdfExtractionMethod" class="form-label">Extraction Method</label>
+                                            <select class="form-select" id="pdfExtractionMethod">
+                                                <option value="camelot" selected>Camelot (Recommended for tables)</option>
+                                                <option value="pypdf">PyPDF (Fallback for text-heavy documents)</option>
+                                            </select>
+                                            <small class="form-text text-muted">
+                                                Camelot is better for tables, PyPDF for text extraction
+                                            </small>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="pdfPageNumbers" class="form-label">Page Numbers</label>
+                                            <input type="text" class="form-control" id="pdfPageNumbers" placeholder="e.g., 1,3,5 or leave blank for all pages">
+                                            <small class="form-text text-muted">
+                                                Specify pages to extract (comma-separated numbers)
+                                            </small>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                             
                             <div class="d-flex gap-2">

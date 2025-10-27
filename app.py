@@ -333,7 +333,7 @@ def dashboard_view(dashboard_id):
 # AI Processing Endpoints
 @app.route('/api/dashboard/<int:dashboard_id>/ai/extract-pdf', methods=['POST'])
 def extract_from_pdf(dashboard_id):
-    """Extract text from PDF using Camelot and store in database"""
+    """Extract text from PDF using Camelot or PyPDF and store in database"""
     if 'user_id' not in session:
         return jsonify({'error': 'Not authenticated'}), 401
     
@@ -348,14 +348,19 @@ def extract_from_pdf(dashboard_id):
     data = request.get_json()
     pdf_data = data.get('pdf_data')
     filename = data.get('filename', 'unknown.pdf')
+    extraction_method = data.get('extraction_method', 'camelot')
+    page_numbers = data.get('page_numbers', '')
     
     if not pdf_data:
         return jsonify({'error': 'PDF data is required'}), 400
     
     try:
         print(f"Extracting text from PDF: {filename}")
-        # Extract text from PDF using Camelot (no AI processing)
-        extracted_text = extract_text_from_pdf_data(pdf_data, filename)
+        print(f"Extraction method: {extraction_method}")
+        print(f"Page numbers: {page_numbers}")
+        
+        # Extract text from PDF using selected method
+        extracted_text = extract_text_from_pdf_data(pdf_data, filename, extraction_method, page_numbers)
         
         if not extracted_text:
             print(f"Failed to extract text from {filename}")
@@ -524,12 +529,11 @@ def extract_from_excel(dashboard_id):
         return jsonify({'error': f'Excel processing failed: {str(e)}'}), 500
 
 
-def extract_text_from_pdf_data(pdf_data, filename):
+def extract_text_from_pdf_data(pdf_data, filename, extraction_method='camelot', page_numbers=''):
     """
-    Extract text from PDF data using Camelot (preserves table structure)
+    Extract text from PDF data using Camelot (for tables) or PyPDF (for text)
     """
     try:
-        import camelot
         from io import BytesIO
         import tempfile
         import os
@@ -538,70 +542,33 @@ def extract_text_from_pdf_data(pdf_data, filename):
         # Convert base64 PDF data back to bytes
         pdf_bytes = base64.b64decode(pdf_data)
         
-        # Create a temporary file for Camelot
+        # Create a temporary file for PDF processing
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
             temp_file.write(pdf_bytes)
             temp_file_path = temp_file.name
         
         try:
-            print(f"Extracting tables from PDF using Camelot: {filename}")
-            
             text_content = ""
-            total_tables_found = 0
             
-            # Try stream method first (better for bank statements without clear borders)
-            try:
-                tables = camelot.read_pdf(temp_file_path, flavor='stream', pages='all')
-                if tables:
-                    stream_tables = len(tables)
-                    print(f"Stream method found {stream_tables} tables")
-                    total_tables_found += stream_tables
-                    
-                    for table_num, table in enumerate(tables):
-                        if table is not None and not table.df.empty:
-                            text_content += f"--- Table {table_num + 1} (Stream) ---\n"
-                            table_text = table.df.to_string(index=False)
-                            text_content += table_text + "\n\n"
-                else:
-                    print("No tables found with stream method")
-            except Exception as e:
-                print(f"Stream method failed: {e}")
-            
-            # If no tables found with stream, try lattice method
-            if not text_content:            
+            # Parse page numbers if provided
+            pages_to_extract = 'all'
+            if page_numbers and page_numbers.strip():
                 try:
-                    tables = camelot.read_pdf(temp_file_path, flavor='lattice', pages='all')
-                    if tables:
-                        lattice_tables = len(tables)
-                        print(f"Lattice method found {lattice_tables} tables")
-                        total_tables_found += lattice_tables
-                        
-                        for table_num, table in enumerate(tables):
-                            if table is not None and not table.df.empty:
-                                text_content += f"--- Table {table_num + 1} (Lattice) ---\n"
-                                table_text = table.df.to_string(index=False)
-                                text_content += table_text + "\n\n"
-                    else:
-                        print("No tables found with lattice method")
+                    # Parse comma-separated page numbers (e.g., "1,3,5")
+                    page_list = [int(p.strip()) for p in page_numbers.split(',') if p.strip().isdigit()]
+                    if page_list:
+                        pages_to_extract = ','.join(map(str, page_list))
+                        print(f"Extracting specific pages: {pages_to_extract}")
                 except Exception as e:
-                    print(f"Lattice method failed: {e}")
+                    print(f"Error parsing page numbers '{page_numbers}': {e}")
+                    pages_to_extract = 'all'
             
-            print(f"Total tables found: {total_tables_found}")
-            
-            # If still no tables found, try PyPDF2 as fallback for text extraction
-            if not text_content:
-                print("No tables found with Camelot, trying PyPDF2 text extraction...")
-                try:
-                    from PyPDF2 import PdfReader
-                    pdf_reader = PdfReader(temp_file_path)
-                    for page_num, page in enumerate(pdf_reader.pages):
-                        page_text = page.extract_text()
-                        if page_text.strip():
-                            text_content += f"--- Page {page_num + 1} Text ---\n"
-                            text_content += page_text + "\n\n"
-                            print(f"Page {page_num + 1} text extracted ({len(page_text)} chars)")
-                except Exception as e:
-                    print(f"PyPDF2 text extraction failed: {e}")
+            if extraction_method == 'camelot':
+                # Use Camelot for table extraction
+                text_content = extract_with_camelot(temp_file_path, filename, pages_to_extract)
+            else:
+                # Use PyPDF for text extraction
+                text_content = extract_with_pypdf(temp_file_path, filename, pages_to_extract)
             
             print(f"Total extracted content: {len(text_content)} characters")
             return text_content.strip()
@@ -611,8 +578,109 @@ def extract_text_from_pdf_data(pdf_data, filename):
             os.unlink(temp_file_path)
         
     except Exception as e:
-        print(f"Error extracting text from PDF {filename} with Camelot: {str(e)}")
+        print(f"Error extracting text from PDF {filename} with {extraction_method}: {str(e)}")
         return None
+
+def extract_with_camelot(temp_file_path, filename, pages='all'):
+    """
+    Extract tables from PDF using Camelot
+    """
+    try:
+        import camelot
+        
+        print(f"Extracting tables from PDF using Camelot: {filename}, pages: {pages}")
+        
+        text_content = ""
+        total_tables_found = 0
+        
+        # Try stream method first (better for bank statements without clear borders)
+        try:
+            tables = camelot.read_pdf(temp_file_path, flavor='stream', pages=pages)
+            if tables:
+                stream_tables = len(tables)
+                print(f"Stream method found {stream_tables} tables")
+                total_tables_found += stream_tables
+                
+                for table_num, table in enumerate(tables):
+                    if table is not None and not table.df.empty:
+                        text_content += f"--- Table {table_num + 1} (Stream) ---\n"
+                        table_text = table.df.to_string(index=False)
+                        text_content += table_text + "\n\n"
+            else:
+                print("No tables found with stream method")
+        except Exception as e:
+            print(f"Stream method failed: {e}")
+        
+        # If no tables found with stream, try lattice method
+        if not text_content:            
+            try:
+                tables = camelot.read_pdf(temp_file_path, flavor='lattice', pages=pages)
+                if tables:
+                    lattice_tables = len(tables)
+                    print(f"Lattice method found {lattice_tables} tables")
+                    total_tables_found += lattice_tables
+                    
+                    for table_num, table in enumerate(tables):
+                        if table is not None and not table.df.empty:
+                            text_content += f"--- Table {table_num + 1} (Lattice) ---\n"
+                            table_text = table.df.to_string(index=False)
+                            text_content += table_text + "\n\n"
+                else:
+                    print("No tables found with lattice method")
+            except Exception as e:
+                print(f"Lattice method failed: {e}")
+        
+        print(f"Total tables found: {total_tables_found}")
+        
+        # If still no tables found, fallback to PyPDF
+        if not text_content:
+            print("No tables found with Camelot, falling back to PyPDF text extraction...")
+            text_content = extract_with_pypdf(temp_file_path, filename, pages)
+        
+        return text_content
+        
+    except Exception as e:
+        print(f"Camelot extraction failed: {e}")
+        # Fallback to PyPDF
+        return extract_with_pypdf(temp_file_path, filename, pages)
+
+def extract_with_pypdf(temp_file_path, filename, pages='all'):
+    """
+    Extract text from PDF using PyPDF
+    """
+    try:
+        from PyPDF2 import PdfReader
+        
+        print(f"Extracting text from PDF using PyPDF: {filename}, pages: {pages}")
+        
+        text_content = ""
+        pdf_reader = PdfReader(temp_file_path)
+        total_pages = len(pdf_reader.pages)
+        
+        # Determine which pages to extract
+        if pages == 'all':
+            pages_to_extract = range(total_pages)
+        else:
+            # Parse comma-separated page numbers (1-indexed)
+            page_list = [int(p.strip()) - 1 for p in pages.split(',') if p.strip().isdigit()]
+            pages_to_extract = [p for p in page_list if 0 <= p < total_pages]
+            if not pages_to_extract:
+                pages_to_extract = range(total_pages)  # Fallback to all pages
+        
+        for page_num in pages_to_extract:
+            if 0 <= page_num < total_pages:
+                page = pdf_reader.pages[page_num]
+                page_text = page.extract_text()
+                if page_text.strip():
+                    text_content += f"--- Page {page_num + 1} Text ---\n"
+                    text_content += page_text + "\n\n"
+                    print(f"Page {page_num + 1} text extracted ({len(page_text)} chars)")
+        
+        return text_content
+        
+    except Exception as e:
+        print(f"PyPDF text extraction failed: {e}")
+        return ""
 
 def call_aimodel_pdf_api(user, pdf_data, filename, prompt=""):
     """Call AI model API to extract data from PDF - using text extraction first"""
@@ -1010,17 +1078,58 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         ai_response = result['choices'][0]['message']['content']
         print(f"API response received: {len(ai_response)} characters")
         
-        # Extract CSV from response
+        # Extract CSV from response - improved logic to separate explanation from CSV
         lines = ai_response.split('\n')
         csv_lines = []
+        explanation_lines = []
+        in_csv_section = False
         
         for line in lines:
-            if ',' in line and (line.startswith('"') or any(char.isdigit() for char in line)):
-                csv_lines.append(line.strip())
-            elif line.strip().lower().startswith('date,description,amount,category'):
-                csv_lines.append(line.strip())
+            line = line.strip()
+            
+            # Check if we've found the CSV header
+            if line.lower().startswith('date,description,amount,category'):
+                in_csv_section = True
+                csv_lines.append(line)
+                continue
+            
+            # If we're in CSV section and line looks like CSV data
+            if in_csv_section and ',' in line:
+                # Check if this line contains actual CSV data (has date-like patterns or amounts)
+                has_date = any(pattern in line for pattern in ['202', '2024', '2025', '2026'])
+                has_amount = any(char.isdigit() for char in line) and any(char in line for char in ['.', '$'])
+                
+                if has_date or has_amount:
+                    csv_lines.append(line)
+                else:
+                    # This might be explanation text mixed in CSV section
+                    explanation_lines.append(line)
+            elif not in_csv_section:
+                # This is explanation text before CSV section
+                explanation_lines.append(line)
+            else:
+                # This might be explanation text after CSV section
+                explanation_lines.append(line)
         
-        # If no CSV found, return a default structure
+        # If no CSV found, try alternative CSV detection
+        if not csv_lines:
+            print("No CSV found with header detection, trying alternative detection")
+            for line in lines:
+                line = line.strip()
+                # Look for lines that have CSV-like structure (comma-separated with dates/amounts)
+                if ',' in line and len(line.split(',')) >= 3:
+                    # Check if it has date-like patterns or amounts
+                    has_date = any(pattern in line for pattern in ['202', '2024', '2025', '2026', '/', '-'])
+                    has_amount = any(char.isdigit() for char in line) and any(char in line for char in ['.', '$'])
+                    
+                    if has_date or has_amount:
+                        csv_lines.append(line)
+                    else:
+                        explanation_lines.append(line)
+                else:
+                    explanation_lines.append(line)
+        
+        # If still no CSV found, return a default structure
         if not csv_lines:
             print("No CSV found in AI response, using default structure")
             csv_lines = [
@@ -1028,8 +1137,23 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
                 "2025-10-01,Sample Transaction,100.00,misc"
             ]
         
-        csv_data = '\n'.join(csv_lines)
-        return csv_data, ai_response
+        # Clean up CSV data - remove any explanation text that might have been included
+        clean_csv_lines = []
+        for line in csv_lines:
+            # Skip lines that look like explanation text
+            if any(keyword in line.lower() for keyword in ['explanation:', 'i removed', 'i filtered', 'i categorized', '**']):
+                explanation_lines.append(line)
+            else:
+                clean_csv_lines.append(line)
+        
+        csv_data = '\n'.join(clean_csv_lines)
+        
+        # Create a clean explanation message
+        explanation = '\n'.join(explanation_lines).strip()
+        if not explanation:
+            explanation = "I've processed your request. Here's the updated CSV data."
+        
+        return csv_data, explanation
         
     except requests.exceptions.RequestException as e:
         print(f"API request failed: {str(e)}")

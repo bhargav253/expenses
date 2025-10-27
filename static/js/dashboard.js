@@ -107,6 +107,24 @@ class DashboardManager {
             aiFileInput.value = '';
         }
         
+        // Hide any CSV preview that might be showing
+        const csvPreviewArea = document.getElementById('csvPreviewArea');
+        if (csvPreviewArea) {
+            csvPreviewArea.classList.add('d-none');
+        }
+        
+        // Hide any processing area that might be showing
+        const processingArea = document.getElementById('processingArea');
+        if (processingArea) {
+            processingArea.classList.add('d-none');
+        }
+        
+        // Hide any editable CSV section that might be showing
+        const editableCsvSection = document.getElementById('editableCsvSection');
+        if (editableCsvSection) {
+            editableCsvSection.classList.add('d-none');
+        }
+        
         // Show all option cards again
         const optionCards = document.querySelectorAll('.option-card');
         optionCards.forEach(card => {
@@ -117,6 +135,17 @@ class DashboardManager {
         this.currentFile = null;
         this.currentFileType = null;
         this.currentCsvData = null;
+        this.currentSessionId = null;
+        
+        // Clear chat messages
+        this.clearAiChat();
+        
+        // Clear localStorage for this dashboard
+        const localStorageKey = `pdf_extraction_${this.dashboardId}`;
+        localStorage.removeItem(localStorageKey);
+        console.log('Cleared localStorage on cancel:', localStorageKey);
+        
+        Utils.showNotification('Upload cancelled', 'info');
     }
     
     async handleAIUpload(event) {
@@ -364,6 +393,15 @@ class DashboardManager {
                 // Show processing status in chat
                 this.addAiChatMessage('assistant', 'Processing PDF extraction...');
                 
+                // Get PDF extraction settings from UI
+                const extractionMethod = document.getElementById('pdfExtractionMethod').value;
+                const pageNumbers = document.getElementById('pdfPageNumbers').value.trim();
+                
+                console.log('PDF extraction settings:', {
+                    method: extractionMethod,
+                    pageNumbers: pageNumbers
+                });
+                
                 // Convert PDF to base64 for extraction
                 const arrayBuffer = await file.arrayBuffer();
                 
@@ -379,7 +417,7 @@ class DashboardManager {
                 
                 base64Pdf = btoa(base64Pdf);
                 
-                // Step 1: Extract PDF text using the new endpoint (no AI processing)
+                // Step 1: Extract PDF text using the new endpoint with extraction settings
                 const extractResponse = await fetch(`/api/dashboard/${this.dashboardId}/ai/extract-pdf`, {
                     method: 'POST',
                     headers: {
@@ -387,7 +425,9 @@ class DashboardManager {
                     },
                     body: JSON.stringify({
                         pdf_data: base64Pdf,
-                        filename: file.name
+                        filename: file.name,
+                        extraction_method: extractionMethod,
+                        page_numbers: pageNumbers
                     })
                 });
                 
@@ -407,7 +447,9 @@ class DashboardManager {
                 localStorage.setItem(localStorageKey, JSON.stringify({
                     extraction_id: extractionId,
                     filename: file.name,
-                    dashboard_id: this.dashboardId
+                    dashboard_id: this.dashboardId,
+                    extraction_method: extractionMethod,
+                    page_numbers: pageNumbers
                 }));
                 
                 console.log('PDF extraction completed, stored extraction_id:', extractionId);
