@@ -927,6 +927,80 @@ def extract_from_excel(dashboard_id):
         })
         return jsonify({'error': f'Excel processing failed: {str(e)}'}), 500
 
+@app.route('/api/dashboard/<int:dashboard_id>/ai/process-chat', methods=['POST'])
+@limiter.limit(RATE_LIMITS['ai_processing'])
+def process_pdf_chat(dashboard_id):
+    """Process PDF chat conversation with AI"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    extraction_id = data.get('extraction_id')
+    prompt = data.get('prompt')
+    
+    if not extraction_id:
+        return jsonify({'error': 'Extraction ID is required'}), 400
+    if not prompt:
+        return jsonify({'error': 'Prompt is required'}), 400
+    
+    try:
+        user = User.query.get(session['user_id'])
+        
+        # Get the PDF extraction from database
+        pdf_extraction = PDFExtraction.query.filter_by(
+            extraction_id=extraction_id,
+            dashboard_id=dashboard_id,
+            user_id=session['user_id']
+        ).first()
+        
+        if not pdf_extraction:
+            return jsonify({'error': 'PDF extraction not found or access denied'}), 404
+        
+        # Get conversation history
+        conversation_history = pdf_extraction.get_conversation_history()
+        
+        # Add user message to conversation
+        pdf_extraction.add_message('user', prompt, pdf_extraction.current_csv_data)
+        
+        # Process with AI using the extracted text and current CSV data
+        processed_csv, ai_response = call_aimodel_with_context_and_csv(
+            user, 
+            pdf_extraction.extracted_text, 
+            pdf_extraction.filename, 
+            prompt, 
+            conversation_history,
+            pdf_extraction.current_csv_data
+        )
+        
+        # Update extraction with new CSV data and AI response
+        pdf_extraction.update_csv_data(processed_csv)
+        pdf_extraction.add_message('assistant', ai_response, processed_csv)
+        db.session.commit()
+        
+        return jsonify({
+            'csv_data': processed_csv,
+            'message': ai_response,
+            'extraction_id': extraction_id
+        })
+        
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"PDF chat processing error: {str(e)}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'extraction_id': extraction_id
+        })
+        return jsonify({'error': f'PDF chat processing failed: {str(e)}'}), 500
+
 
 def extract_text_from_pdf_data(pdf_data, filename, extraction_method='camelot', page_numbers=''):
     """
