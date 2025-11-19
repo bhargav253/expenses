@@ -39,35 +39,6 @@ const Utils = {
             style: 'currency',
             currency: 'USD'
         }).format(amount);
-    },
-    
-    // Format date
-    formatDate: (date) => {
-        return new Date(date).toLocaleDateString('en-US');
-    },
-    
-    // Debounce function
-    debounce: (func, wait) => {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    },
-    
-    // Validate email
-    isValidEmail: (email) => {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        return emailRegex.test(email);
-    },
-    
-    // Generate unique ID
-    generateId: () => {
-        return Date.now().toString(36) + Math.random().toString(36).substr(2);
     }
 };
 

@@ -237,71 +237,6 @@ class DashboardManager {
         
         return null;
     }
-    
-    
-    async processPdfWithAI(file) {
-        try {
-            const processingArea = document.getElementById('processingArea');
-            const progressBar = processingArea.querySelector('.progress-bar');
-
-            // Show processing UI
-            processingArea.classList.remove('d-none');
-
-            // Convert PDF to base64 for AI processing - use a safer method
-            const arrayBuffer = await file.arrayBuffer();
-            
-            // Use a safer method to convert array buffer to base64
-            let base64Pdf = '';
-            const bytes = new Uint8Array(arrayBuffer);
-            const chunkSize = 8192; // Process in chunks to avoid argument limits
-            
-            for (let i = 0; i < bytes.length; i += chunkSize) {
-                const chunk = bytes.subarray(i, i + chunkSize);
-                base64Pdf += String.fromCharCode.apply(null, chunk);
-            }
-            
-            base64Pdf = btoa(base64Pdf);
-            
-            // Show processing status
-            progressBar.style.width = '50%';
-            
-            // Send PDF to AI for extraction - use direct fetch to avoid argument issues
-            const response = await fetch(`/api/dashboard/${this.dashboardId}/ai/extract-pdf`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    pdf_data: base64Pdf,
-                    filename: file.name
-                })
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const result = await response.json();
-            
-            // Update progress
-            progressBar.style.width = '100%';
-            
-            if (result.csv_data) {
-                this.currentCsvData = result.csv_data;
-                this.showCsvPreview(result.csv_data);
-                Utils.showNotification('PDF processed successfully using AI', 'success');
-            } else {
-                throw new Error('No CSV data returned from AI');
-            }
-            
-        } catch (error) {
-            debug.error('PDF processing error:', error);
-            Utils.showNotification('Error processing PDF with AI. Please try again or use Google Sheets copy instead.', 'danger');
-            this.resetUploadUI();
-        }
-    }
-    
-    
     readFileAsText(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -509,87 +444,6 @@ class DashboardManager {
         }
     }
     
-    getConversationHistory() {
-        const chatMessages = document.getElementById('aiChatMessages');
-        const messages = chatMessages.querySelectorAll('.chat-message');
-        const history = [];
-        
-        messages.forEach(message => {
-            const role = message.classList.contains('user') ? 'user' : 'assistant';
-            const content = message.textContent.replace(/^(You|AI Assistant):\s*/, '');
-            history.push({
-                role: role,
-                content: content
-            });
-        });
-        
-        return history;
-    }
-
-    async processPdfWithPrompt(file, prompt) {
-        try {
-            const processingArea = document.getElementById('processingArea');
-            const progressBar = processingArea.querySelector('.progress-bar');
-
-            // Show processing UI
-            processingArea.classList.remove('d-none');
-
-            // Convert PDF to base64 for AI processing
-            const arrayBuffer = await file.arrayBuffer();
-            
-            // Use a safer method to convert array buffer to base64
-            let base64Pdf = '';
-            const bytes = new Uint8Array(arrayBuffer);
-            const chunkSize = 8192; // Process in chunks to avoid argument limits
-            
-            for (let i = 0; i < bytes.length; i += chunkSize) {
-                const chunk = bytes.subarray(i, i + chunkSize);
-                base64Pdf += String.fromCharCode.apply(null, chunk);
-            }
-            
-            base64Pdf = btoa(base64Pdf);
-            
-            // Show processing status
-            progressBar.style.width = '50%';
-            
-            // Send PDF to AI for extraction with prompt
-            const response = await fetch(`/api/dashboard/${this.dashboardId}/ai/extract-pdf`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    pdf_data: base64Pdf,
-                    filename: file.name,
-                    prompt: prompt
-                })
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const result = await response.json();
-            
-            // Update progress
-            progressBar.style.width = '100%';
-            
-            if (result.csv_data) {
-                this.currentCsvData = result.csv_data;
-                this.addAiChatMessage('assistant', 'I\'ve extracted the data from your PDF. Here\'s the processed CSV:');
-                this.showCsvPreview(result.csv_data);
-                Utils.showNotification('PDF processed successfully using AI', 'success');
-            } else {
-                throw new Error('No CSV data returned from AI');
-            }
-            
-        } catch (error) {
-            debug.error('PDF processing error:', error);
-            this.addAiChatMessage('assistant', 'Error processing PDF with AI. Please try again.');
-            this.resetUploadUI();
-        }
-    }
-    
     async processExcelWithPrompt(file, prompt) {
         try {
             const processingArea = document.getElementById('processingArea');
@@ -743,48 +597,6 @@ class DashboardManager {
         return null;
     }
 
-    async handlePdfUpload(event) {
-        const file = event.target.files[0];
-        if (!file || file.type !== 'application/pdf') {
-            Utils.showNotification('Please select a valid PDF file', 'warning');
-            return;
-        }
-
-        const processingArea = document.getElementById('processingArea');
-        const progressBar = processingArea.querySelector('.progress-bar');
-
-        // Show processing UI
-        processingArea.classList.remove('d-none');
-
-        try {
-            // Convert PDF to base64 for AI processing
-            const arrayBuffer = await file.arrayBuffer();
-            const base64Pdf = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
-            
-            // Show processing status
-            progressBar.style.width = '50%';
-            
-            // Send PDF to AI for extraction
-            const response = await ApiClient.ai.extractFromPdf(this.dashboardId, base64Pdf, file.name);
-            
-            // Update progress
-            progressBar.style.width = '100%';
-            
-            if (response.csv_data) {
-                this.currentCsvData = response.csv_data;
-                this.showCsvPreview(response.csv_data);
-                Utils.showNotification('PDF processed successfully using AI', 'success');
-            } else {
-                throw new Error('No CSV data returned from AI');
-            }
-            
-        } catch (error) {
-            debug.error('PDF processing error:', error);
-            Utils.showNotification('Error processing PDF with AI. Please try again or use Google Sheets copy instead.', 'danger');
-            this.resetUploadUI();
-        }
-    }
-
     async handleSheetsPaste(event) {
         let pastedData = '';
         
@@ -883,50 +695,6 @@ class DashboardManager {
         });
         
         return csvRows.join('\n');
-    }
-
-    extractTablesFromText(text) {
-        // Simple table extraction logic
-        // This is a basic implementation - in production, you'd want more sophisticated parsing
-        
-        const lines = text.split('\n').filter(line => line.trim());
-        const potentialTableRows = [];
-        
-        // Look for lines that might be table rows (contain numbers and consistent patterns)
-        lines.forEach(line => {
-            // Check if line contains date patterns and amounts
-            const hasDate = /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(line);
-            const hasAmount = /\$\d+\.?\d*|USD\s*\d+\.?\d*/.test(line);
-            const hasMultipleWords = line.trim().split(/\s+/).length >= 3;
-            
-            if ((hasDate || hasAmount) && hasMultipleWords) {
-                potentialTableRows.push(line.trim());
-            }
-        });
-
-        // Convert to CSV format
-        if (potentialTableRows.length > 0) {
-            const csvRows = ['Date,Description,Amount,Category'];
-            
-            potentialTableRows.forEach(row => {
-                // Simple parsing - extract date, description, amount
-                const dateMatch = row.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
-                const amountMatch = row.match(/(\$\d+\.?\d*|USD\s*\d+\.?\d*)/);
-                
-                const date = dateMatch ? dateMatch[1] : '';
-                const amount = amountMatch ? amountMatch[1].replace('USD', '').trim() : '';
-                const description = row.replace(date || '', '').replace(amount || '', '').trim();
-                
-                if (date && amount && description) {
-                    csvRows.push(`"${date}","${description}","${amount}",""`);
-                }
-            });
-            
-            return csvRows.join('\n');
-        }
-        
-        // Fallback: return text as single column CSV
-        return 'Description\n' + lines.map(line => `"${line}"`).join('\n');
     }
 
     showCsvPreview(csvData) {
@@ -1600,21 +1368,6 @@ class DashboardManager {
         }
     }
 
-    getSelectedUserIdFromDropdown() {
-        const dropdownButton = document.getElementById('userDropdown');
-        if (!dropdownButton) return 'all';
-        
-        // Extract user ID from dropdown button text
-        const buttonText = dropdownButton.textContent.trim();
-        const activeItem = document.querySelector('#userDropdownMenu .dropdown-item.active');
-        
-        if (activeItem) {
-            return activeItem.getAttribute('data-user-id') || 'all';
-        }
-        
-        return 'all';
-    }
-
     handleUserChange(selectedUserId) {
         debug.log('Selected user:', selectedUserId);
         // Refresh the table with the selected user filter
@@ -1666,20 +1419,6 @@ class DashboardManager {
             debug.error('Error getting months from database:', error);
             return [];
         }
-    }
-
-    generateMonthOptions() {
-        const months = [];
-        const currentDate = new Date();
-        
-        for (let i = 0; i < 12; i++) {
-            const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
-            const value = date.toISOString().substring(0, 7);
-            const label = date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
-            months.push({ value, label });
-        }
-        
-        return months;
     }
 
     handleMonthChange(selectedMonth) {
@@ -2271,13 +2010,6 @@ class DashboardManager {
         }
     }
     
-    async saveMonthlyChanges() {
-        // This function is now deprecated - individual operations are handled separately
-        debug.log('saveMonthlyChanges is deprecated - use individual update/delete/add functions');
-        Utils.showNotification('Individual row operations are now handled separately', 'info');
-    }
-
-
     async refreshYearlyData() {
         try {
             // In production, this would fetch aggregated yearly data
@@ -2285,22 +2017,6 @@ class DashboardManager {
         } catch (error) {
             debug.error('Error refreshing yearly data:', error);
         }
-    }
-
-    addManualSaveButton() {
-        // Create a manual save button for testing
-        const container = document.getElementById('monthlyExpensesTable');
-        if (!container) return;
-        
-        const saveButton = document.createElement('button');
-        saveButton.className = 'btn btn-primary mt-3';
-        saveButton.innerHTML = '<i class="fas fa-save me-1"></i>Save Changes Manually';
-        saveButton.addEventListener('click', () => {
-            debug.log('Manual save button clicked');
-            this.saveMonthlyChanges();
-        });
-        
-        container.parentNode.insertBefore(saveButton, container.nextSibling);
     }
 
     resetUploadUI() {
@@ -2334,67 +2050,6 @@ class DashboardManager {
         this.currentCsvData = null;
         this.currentSessionId = null;
     }
-}
-
-// Invitation functionality
-function initializeInvitationFunctionality() {
-    const inviteUserBtn = document.getElementById('inviteUser');
-    if (inviteUserBtn) {
-        inviteUserBtn.addEventListener('click', sendInvitation);
-    }
-}
-
-async function sendInvitation() {
-    const emailInput = document.getElementById('shareEmail');
-    const messageInput = document.getElementById('invitationMessage');
-    const email = emailInput.value.trim();
-    const message = messageInput.value.trim();
-    
-    if (!email) {
-        Utils.showNotification('Please enter an email address', 'warning');
-        return;
-    }
-    
-    if (!validateEmail(email)) {
-        Utils.showNotification('Please enter a valid email address', 'warning');
-        return;
-    }
-    
-    try {
-        const dashboardId = window.location.pathname.split('/').pop();
-        const response = await fetch(`/api/dashboard/${dashboardId}/invite`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                email: email,
-                message: message
-            })
-        });
-        
-        const result = await response.json();
-        
-        if (response.ok) {
-            Utils.showNotification('Invitation sent successfully!', 'success');
-            
-            // Clear form and close modal
-            emailInput.value = '';
-            messageInput.value = '';
-            const modal = bootstrap.Modal.getInstance(document.getElementById('shareDashboardModal'));
-            modal.hide();
-        } else {
-            Utils.showNotification(result.error || 'Failed to send invitation', 'danger');
-        }
-    } catch (error) {
-        debug.error('Error sending invitation:', error);
-        Utils.showNotification('Network error: ' + error.message, 'danger');
-    }
-}
-
-function validateEmail(email) {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
 }
 
 // Edit Mode Settings functionality
