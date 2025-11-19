@@ -122,7 +122,7 @@ const ApiClient = {
             
             return data;
         } catch (error) {
-            console.error('API request failed:', error);
+            debug.error('API request failed:', error);
             throw error;
         }
     },
@@ -263,7 +263,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
     
-    console.log('Expense Tracker initialized');
+    debug.log('Expense Tracker initialized');
 });
 
 // Export for use in other modules

@@ -14,16 +14,18 @@ A comprehensive expense tracking web application with AI-powered data processing
 - Role-based permissions (owner/member)
 - Real-time collaboration
 
-### 🔒 Client-Side PDF Processing
-- Bank statements processed entirely in browser
-- No sensitive PDF files uploaded to server
-- Secure data extraction to CSV format
+### 🔒 Secure Server-Side PDF Processing
+- Server-side PDF text extraction using Camelot and PyPDF
+- Multiple extraction methods (Camelot for tables, PyPDF for text)
+- Page-specific extraction support
+- Secure file upload validation and MIME type checking
 
 ### 🤖 AI-Powered Data Processing
-- Mistral AI integration for intelligent data filtering
-- Natural language chat interface
-- Context-aware conversations
-- CSV transformation and categorization
+- Multiple AI provider support (DeepSeek, Mistral, OpenAI)
+- Conversational PDF processing with context retention
+- Natural language chat interface for CSV manipulation
+- Context-aware conversations with conversation history
+- CSV transformation, filtering, and categorization
 
 ### 📈 Interactive Expense Management
 - **Monthly View**: Google Sheets-like editing with Handsontable.js
@@ -32,10 +34,11 @@ A comprehensive expense tracking web application with AI-powered data processing
 - **Pivot Tables**: Automatic expense analysis by month and category
 
 ### 🛡️ Security & Privacy
-- Client-side PDF processing (bank statements never leave device)
+- Server-side PDF processing with secure file upload validation
 - Encrypted API key storage
 - Rate limiting for AI API calls
 - Secure OAuth implementation
+- Comprehensive security headers and input validation
 
 ## Technology Stack
 
@@ -49,8 +52,8 @@ A comprehensive expense tracking web application with AI-powered data processing
 - **Bootstrap 5** - Responsive UI framework
 - **Handsontable.js** - Interactive spreadsheet editing
 - **DataTables.js** - Advanced table functionality
-- **PDF.js** - Client-side PDF processing
 - **Vanilla JavaScript** - Custom functionality
+- **Debug Utility** - Conditional logging for development
 
 ### AI Integration
 - **Mistral AI** - Primary AI provider
@@ -104,7 +107,8 @@ A comprehensive expense tracking web application with AI-powered data processing
 - SQLite database is used automatically
 - No Google OAuth setup required
 - AI functionality uses mock responses (no API key needed)
-- All PDF processing happens client-side
+- PDF processing happens server-side with Camelot and PyPDF
+- Structured logging to `logs/app.log` with JSON format
 
 ### Cloud Deployment (Render.com)
 
@@ -155,7 +159,8 @@ A comprehensive expense tracking web application with AI-powered data processing
 
 ### 3. Data Ingestion
 - Navigate to the "Data Ingress" tab
-- Upload bank statement PDFs (processed client-side)
+- Upload bank statement PDFs (processed server-side with Camelot/PyPDF)
+- Choose extraction method and page numbers
 - Review extracted CSV data
 - Use AI chat to filter and categorize expenses
 - Accept final CSV for storage
@@ -176,12 +181,22 @@ A comprehensive expense tracking web application with AI-powered data processing
 
 ## Security Features
 
-- **Client-Side PDF Processing**: Bank statements never leave your device
+### 🔒 Enhanced Security Implementation
+- **Flask-Talisman**: Security headers (HSTS, CSP, X-Frame-Options, Referrer Policy)
+- **Flask-Limiter**: Rate limiting for API endpoints (PDF upload, AI processing, login)
+- **File Upload Security**: MIME type validation, file size limits, path traversal protection
+- **Structured Logging**: JSON-formatted logs with sensitive data redaction
+- **Input Validation**: Server-side validation for all user inputs and Handsontable edits
+- **Formula Injection Protection**: CSV export sanitization to prevent Excel formula injection
+- **Secure Cookies**: HTTPOnly, Secure, SameSite cookie flags
+- **Permission System**: Role-based access control with private/public edit modes
+
+### 🛡️ Privacy & Data Protection
+- **Server-Side PDF Processing**: Secure file upload with validation and MIME type checking
 - **OAuth Authentication**: Secure, passwordless login
-- **API Key Encryption**: Mistral API keys stored securely
+- **API Key Encryption**: AI provider API keys stored securely
 - **Session Management**: Secure cookie-based sessions
-- **Input Validation**: All user inputs are validated
-- **Rate Limiting**: AI API calls are rate-limited
+- **Rate Limiting**: AI API calls are rate-limited to prevent abuse
 
 ## File Structure
 

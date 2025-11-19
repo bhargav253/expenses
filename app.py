@@ -1,4 +1,7 @@
 from flask import Flask, render_template, redirect, url_for, session, request, jsonify, flash
+from flask_talisman import Talisman
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from extensions import db
 from authlib.integrations.flask_client import OAuth
 import os
@@ -6,10 +9,281 @@ from datetime import datetime
 import json
 import requests
 import uuid
+import logging
+import sys
+import inspect
+import magic
+import re
+import json
+from logging.handlers import RotatingFileHandler
+
+# Security Configuration
+# ======================
+
+# Rate Limiting Configuration
+RATE_LIMITS = {
+    'pdf_upload': os.environ.get('PDF_UPLOAD_RATE_LIMIT', '5/minute'),
+    'ai_processing': os.environ.get('AI_PROCESSING_RATE_LIMIT', '10/minute'),
+    'login': os.environ.get('LOGIN_RATE_LIMIT', '100/minute'),  # Increased for testing
+    'general_api': os.environ.get('GENERAL_API_RATE_LIMIT', '100/hour')
+}
+
+# File Upload Security
+MAX_FILE_SIZE_MB = int(os.environ.get('MAX_FILE_SIZE_MB', '10'))
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+
+# Initialize Flask-Limiter
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=[RATE_LIMITS['general_api']]
+)
+
+# Determine if we're in development mode
+# Check multiple environment variables for development mode detection
+is_development = (
+    os.environ.get('FLASK_ENV') == 'development' or 
+    os.environ.get('ENVIRONMENT') == 'development' or
+    os.environ.get('FLASK_DEBUG') == '1' or
+    (os.environ.get('FLASK_ENV') is None and __name__ == '__main__')
+)
+
+# Configure secure cookies based on environment
+app.config.update(
+    SESSION_COOKIE_SECURE=not is_development,  # HTTPS only in production
+    SESSION_COOKIE_HTTPONLY=True,              # No JavaScript access (always enabled for security)
+    SESSION_COOKIE_SAMESITE='Lax'              # CSRF protection
+)
+
+# Initialize Flask-Talisman for security headers
+talisman_config = {
+    'content_security_policy': {
+        'default-src': "'self'",
+        'script-src': ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net", "https://code.jquery.com", "https://cdn.datatables.net"],
+        'style-src': ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net"],
+        'img-src': ["'self'", "data:", "https:"],
+        'font-src': ["'self'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net"],
+        'connect-src': ["'self'"]
+    },
+    'content_security_policy_nonce_in': ['script-src'],
+    'frame_options': 'DENY',
+    'referrer_policy': 'strict-origin-when-cross-origin'
+}
+
+# Only enable strict security features in production
+if not is_development:
+    talisman_config.update({
+        'force_https': True,
+        'session_cookie_secure': True,
+        'strict_transport_security': True,
+        'strict_transport_security_max_age': 31536000
+    })
+else:
+    # Development settings
+    talisman_config.update({
+        'force_https': False,
+        'session_cookie_secure': False,
+        'strict_transport_security': False
+    })
+
+talisman = Talisman(app, **talisman_config)
+
+# Structured Logging Setup
+# ========================
+
+class SecurityFilter(logging.Filter):
+    """Filter to redact sensitive information from logs"""
+    
+    def filter(self, record):
+        # Redact sensitive data from log messages
+        if hasattr(record, 'msg'):
+            record.msg = self.redact_sensitive_data(record.msg)
+        return True
+    
+    def redact_sensitive_data(self, message):
+        """Redact sensitive information from log messages"""
+        if not isinstance(message, str):
+            return message
+        
+        # Redact API keys
+        message = re.sub(r'(api[_-]?key["\']?\s*:\s*["\']?)([^"\'\s]+)', r'\1[REDACTED]', message, flags=re.IGNORECASE)
+        message = re.sub(r'(authorization["\']?\s*:\s*["\']?)(bearer\s+[^"\'\s]+)', r'\1[REDACTED]', message, flags=re.IGNORECASE)
+        message = re.sub(r'(password["\']?\s*:\s*["\']?)([^"\'\s]+)', r'\1[REDACTED]', message, flags=re.IGNORECASE)
+        message = re.sub(r'(secret["\']?\s*:\s*["\']?)([^"\'\s]+)', r'\1[REDACTED]', message, flags=re.IGNORECASE)
+        
+        return message
+
+class JSONFormatter(logging.Formatter):
+    """Custom JSON formatter for structured logging"""
+    
+    def format(self, record):
+        log_entry = {
+            'level': record.levelname,
+            'message': record.getMessage(),
+            'file': record.pathname,
+            'line': record.lineno,
+            'function': record.funcName,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Add user context if available
+        if hasattr(record, 'user_id'):
+            log_entry['user_id'] = record.user_id
+        if hasattr(record, 'dashboard_id'):
+            log_entry['dashboard_id'] = record.dashboard_id
+        
+        # Add error type for exceptions
+        if record.exc_info:
+            log_entry['error_type'] = record.exc_info[0].__name__
+        
+        return json.dumps(log_entry)
+
+def setup_logging():
+    """Configure structured logging with file rotation"""
+    # Create logs directory if it doesn't exist
+    os.makedirs('logs', exist_ok=True)
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    
+    # Remove existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # File handler with rotation
+    file_handler = RotatingFileHandler(
+        'logs/app.log',
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=7,          # Keep 7 days of logs
+        encoding='utf-8'
+    )
+    
+    # Apply JSON formatter and security filter
+    file_handler.setFormatter(JSONFormatter())
+    file_handler.addFilter(SecurityFilter())
+    
+    # Console handler for development
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(JSONFormatter())
+    console_handler.addFilter(SecurityFilter())
+    
+    # Add handlers
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+# Initialize logging
+setup_logging()
+logger = logging.getLogger(__name__)
+
+# Security Helper Functions
+# =========================
+
+def validate_file_upload(file_data, filename, allowed_mime_types=['application/pdf', 'text/csv', 
+                                                                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                                                 'application/vnd.ms-excel']):
+    """Validate file upload for security"""
+    
+    # Check file size
+    if len(file_data) > MAX_FILE_SIZE_BYTES:
+        raise ValueError(f"File too large. Maximum size is {MAX_FILE_SIZE_MB}MB")
+    
+    # Check file extension
+    allowed_extensions = ['.pdf', '.csv', '.xlsx', '.xls']
+    file_ext = os.path.splitext(filename)[1].lower()
+    if file_ext not in allowed_extensions:
+        raise ValueError(f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}")
+    
+    # MIME type validation using python-magic
+    try:
+        mime_type = magic.from_buffer(file_data[:1024], mime=True)
+        if mime_type not in allowed_mime_types:
+            raise ValueError(f"Invalid file type detected: {mime_type}")
+    except Exception as e:
+        logger.warning(f"MIME type validation failed: {e}")
+        # Fallback to extension-based validation if MIME detection fails
+        pass
+    
+    # Additional security checks
+    # Prevent path traversal in filename
+    if '..' in filename or '/' in filename or '\\' in filename:
+        raise ValueError("Invalid filename")
+    
+    return True
+
+def sanitize_csv_for_export(csv_data):
+    """Sanitize CSV data to prevent formula injection"""
+    lines = csv_data.split('\n')
+    sanitized_lines = []
+    
+    for line in lines:
+        cells = line.split(',')
+        sanitized_cells = []
+        
+        for cell in cells:
+            # Remove quotes for processing
+            cell_content = cell.strip().strip('"\'')
+            
+            # Check for formula injection patterns
+            if cell_content.startswith(('=', '+', '-', '@')):
+                # Prefix with apostrophe to neutralize formula
+                sanitized_cell = "'" + cell_content
+            else:
+                sanitized_cell = cell_content
+            
+            # Re-add quotes if needed
+            if ',' in sanitized_cell or '"' in sanitized_cell:
+                sanitized_cell = '"' + sanitized_cell.replace('"', '""') + '"'
+            
+            sanitized_cells.append(sanitized_cell)
+        
+        sanitized_lines.append(','.join(sanitized_cells))
+    
+    return '\n'.join(sanitized_lines)
+
+def validate_expense_data(expense_data):
+    """Validate expense data from Handsontable edits"""
+    required_fields = ['date', 'description', 'amount']
+    valid_categories = ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 
+                       'hospital', 'misc', 'rent', 'mortgage', 'restaurant', 
+                       'service', 'shopping', 'transport', 'utility', 'vacation']
+    
+    # Check required fields
+    for field in required_fields:
+        if field not in expense_data or not expense_data[field]:
+            raise ValueError(f"Missing required field: {field}")
+    
+    # Validate date format
+    try:
+        datetime.strptime(expense_data['date'], '%Y-%m-%d')
+    except ValueError:
+        raise ValueError("Invalid date format. Use YYYY-MM-DD")
+    
+    # Validate amount
+    try:
+        amount = float(expense_data['amount'])
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+    except (ValueError, TypeError):
+        raise ValueError("Invalid amount format")
+    
+    # Validate category
+    category = expense_data.get('category', 'misc').lower()
+    if category not in valid_categories:
+        raise ValueError(f"Invalid category. Must be one of: {', '.join(valid_categories)}")
+    
+    # Sanitize description to prevent XSS
+    description = expense_data['description']
+    if any(char in description for char in ['<', '>', '&', '"', "'"]):
+        # HTML encode special characters
+        description = description.replace('&', '&').replace('<', '<').replace('>', '>').replace('"', '"').replace("'", '&#x27;')
+        expense_data['description'] = description
+    
+    return expense_data
 
 # AI Model Configuration
 AI_MODELS = {
@@ -59,7 +333,7 @@ from models import User, Dashboard, DashboardMember, Expense, Category, Uploaded
 def init_db():
     with app.app_context():
         db.create_all()
-        print("Database tables created successfully")
+        logger.info("Database tables created successfully")
 
 # Create tables on startup
 init_db()
@@ -73,6 +347,7 @@ def index():
 
 # Username/Password Authentication
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit(RATE_LIMITS['login'])
 def login():
     if request.method == 'POST':
         username_or_email = request.form.get('username_or_email')
@@ -331,7 +606,158 @@ def dashboard_view(dashboard_id):
 
 
 # AI Processing Endpoints
+@app.route('/api/dashboard/<int:dashboard_id>/ai/session', methods=['POST'])
+def create_ai_session(dashboard_id):
+    """Create a new AI session for CSV processing"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    csv_data = data.get('csv_data', '')
+    
+    # Generate session ID
+    session_id = str(uuid.uuid4())
+    
+    # Store session in database
+    chat_session = ChatSession(
+        dashboard_id=dashboard_id,
+        user_id=session['user_id'],
+        session_id=session_id,
+        original_csv_data=csv_data,
+        current_csv_data=csv_data,
+        conversation_history='[]'
+    )
+    db.session.add(chat_session)
+    db.session.commit()
+    
+    return jsonify({
+        'session_id': session_id,
+        'message': 'AI session created successfully'
+    })
+
+@app.route('/api/dashboard/<int:dashboard_id>/ai/session/<string:session_id>', methods=['GET'])
+def get_ai_session(dashboard_id, session_id):
+    """Get AI session data"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    chat_session = ChatSession.query.filter_by(
+        session_id=session_id,
+        dashboard_id=dashboard_id,
+        user_id=session['user_id']
+    ).first()
+    
+    if not chat_session:
+        return jsonify({'error': 'Session not found'}), 404
+    
+    return jsonify({
+        'session_id': chat_session.session_id,
+        'csv_data': chat_session.get_csv_data(),
+        'conversation_history': chat_session.get_conversation_history()
+    })
+
+@app.route('/api/dashboard/<int:dashboard_id>/ai/process', methods=['POST'])
+@limiter.limit(RATE_LIMITS['ai_processing'])
+def process_csv_with_ai(dashboard_id):
+    """Process CSV data with AI"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    session_id = data.get('session_id')
+    prompt = data.get('prompt')
+    csv_data = data.get('csv_data', '')
+    
+    if not prompt:
+        return jsonify({'error': 'Prompt is required'}), 400
+    
+    try:
+        user = User.query.get(session['user_id'])
+        
+        # Get or create session
+        chat_session = None
+        if session_id:
+            chat_session = ChatSession.query.filter_by(
+                session_id=session_id,
+                dashboard_id=dashboard_id,
+                user_id=session['user_id']
+            ).first()
+        
+        if not chat_session:
+            # Create new session
+            session_id = str(uuid.uuid4())
+            chat_session = ChatSession(
+                dashboard_id=dashboard_id,
+                user_id=session['user_id'],
+                session_id=session_id,
+                original_csv_data=csv_data,
+                current_csv_data=csv_data,
+                conversation_history='[]'
+            )
+            db.session.add(chat_session)
+        
+        # Get conversation history
+        conversation_history = chat_session.get_conversation_history()
+        
+        # Add user message to conversation
+        chat_session.add_message('user', prompt, csv_data)
+        
+        # Process with AI
+        processed_csv, ai_response = call_aimodel_with_context_and_csv(
+            user, 
+            "",  # No PDF text for CSV processing
+            "csv_data.csv", 
+            prompt, 
+            conversation_history,
+            csv_data
+        )
+        
+        # Update session with new CSV data and AI response
+        chat_session.update_csv_data(processed_csv)
+        chat_session.add_message('assistant', ai_response, processed_csv)
+        db.session.commit()
+        
+        return jsonify({
+            'processed_csv': processed_csv,
+            'message': ai_response,
+            'session_id': chat_session.session_id
+        })
+        
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"CSV processing error: {str(e)}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id
+        })
+        return jsonify({'error': f'CSV processing failed: {str(e)}'}), 500
+
 @app.route('/api/dashboard/<int:dashboard_id>/ai/extract-pdf', methods=['POST'])
+@limiter.limit(RATE_LIMITS['pdf_upload'])
 def extract_from_pdf(dashboard_id):
     """Extract text from PDF using Camelot or PyPDF and store in database"""
     if 'user_id' not in session:
@@ -355,18 +781,46 @@ def extract_from_pdf(dashboard_id):
         return jsonify({'error': 'PDF data is required'}), 400
     
     try:
-        print(f"Extracting text from PDF: {filename}")
-        print(f"Extraction method: {extraction_method}")
-        print(f"Page numbers: {page_numbers}")
+        # Convert base64 PDF data back to bytes for validation
+        import base64
+        pdf_bytes = base64.b64decode(pdf_data)
+        
+        # Validate file upload security
+        try:
+            validate_file_upload(pdf_bytes, filename)
+        except ValueError as e:
+            logger.warning(f"File upload validation failed: {e}", extra={
+                'user_id': session['user_id'],
+                'dashboard_id': dashboard_id,
+                'filename': filename
+            })
+            return jsonify({'error': str(e)}), 400
+        
+        logger.info(f"Extracting text from PDF: {filename}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'extraction_method': extraction_method,
+            'page_numbers': page_numbers,
+            'pdf_filename': filename
+        })
         
         # Extract text from PDF using selected method
         extracted_text = extract_text_from_pdf_data(pdf_data, filename, extraction_method, page_numbers)
         
         if not extracted_text:
-            print(f"Failed to extract text from {filename}")
+            logger.error(f"Failed to extract text from {filename}", extra={
+                'user_id': session['user_id'],
+                'dashboard_id': dashboard_id,
+                'pdf_filename': filename
+            })
             return jsonify({'error': 'PDF extraction failed - no text found'}), 500
         
-        print(f"PDF extraction successful: {len(extracted_text)} characters")
+        logger.info(f"PDF extraction successful: {len(extracted_text)} characters", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'pdf_filename': filename,
+            'extracted_length': len(extracted_text)
+        })
         
         # Generate unique extraction ID
         extraction_id = str(uuid.uuid4())
@@ -391,7 +845,11 @@ def extract_from_pdf(dashboard_id):
         db.session.add(pdf_extraction)
         db.session.commit()
         
-        print(f"PDF extraction stored in database with ID: {extraction_id}")
+        logger.info(f"PDF extraction stored in database with ID: {extraction_id}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'extraction_id': extraction_id
+        })
         
         return jsonify({
             'extraction_id': extraction_id,
@@ -400,88 +858,13 @@ def extract_from_pdf(dashboard_id):
         })
         
     except Exception as e:
-        print(f"PDF extraction error: {str(e)}")
+        logger.error(f"PDF extraction error: {str(e)}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'filename': filename
+        })
         return jsonify({'error': f'PDF extraction failed: {str(e)}'}), 500
 
-@app.route('/api/dashboard/<int:dashboard_id>/ai/process-chat', methods=['POST'])
-def process_chat(dashboard_id):
-    """Process conversational AI chat with PDF data and conversation state from database"""
-    if 'user_id' not in session:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    # Check dashboard access
-    member = DashboardMember.query.filter_by(
-        dashboard_id=dashboard_id, 
-        user_id=session['user_id']
-    ).first()
-    if not member:
-        return jsonify({'error': 'Access denied'}), 403
-    
-    data = request.get_json()
-    prompt = data.get('prompt')
-    extraction_id = data.get('extraction_id')
-    
-    if not prompt:
-        return jsonify({'error': 'Prompt is required'}), 400
-    
-    if not extraction_id:
-        return jsonify({'error': 'Extraction ID is required. Please upload a PDF first.'}), 400
-    
-    try:
-        user = User.query.get(session['user_id'])
-        
-        # Get conversation state from database using extraction_id
-        pdf_extraction = PDFExtraction.query.filter_by(
-            extraction_id=extraction_id,
-            dashboard_id=dashboard_id,
-            user_id=session['user_id']
-        ).first()
-        
-        if not pdf_extraction:
-            return jsonify({'error': 'PDF extraction not found. Please upload a PDF first.'}), 400
-        
-        extracted_text = pdf_extraction.extracted_text
-        filename = pdf_extraction.filename
-        current_csv_data = pdf_extraction.current_csv_data or ''
-        conversation_history = pdf_extraction.get_conversation_history()
-        
-        print(f"Processing chat request for {filename}: {len(prompt)} chars")
-        print(f"Current CSV data length: {len(current_csv_data)}")
-        print(f"Conversation history turns: {len(conversation_history)}")
-        
-        # Add user message to conversation history
-        pdf_extraction.add_message('user', prompt, current_csv_data)
-        
-        # Call AI model with conversation context and current CSV data
-        csv_data, ai_response = call_aimodel_with_context_and_csv(
-            user, 
-            extracted_text, 
-            filename, 
-            prompt, 
-            conversation_history,
-            current_csv_data
-        )
-        
-        print(f"AI processing successful, returned {len(csv_data)} characters")
-        
-        # Update database with new CSV data and AI response
-        pdf_extraction.update_csv_data(csv_data)
-        pdf_extraction.add_message('assistant', ai_response, csv_data)
-        pdf_extraction.status = 'completed'
-        db.session.commit()
-        
-        return jsonify({
-            'csv_data': csv_data,
-            'message': ai_response,
-            'status': 'completed'
-        })
-        
-    except ValueError as e:
-        # Handle missing API key or unsupported model
-        return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        print(f"AI processing error: {str(e)}")
-        return jsonify({'error': f'AI processing failed: {str(e)}'}), 500
 
 @app.route('/api/dashboard/<int:dashboard_id>/ai/extract-excel', methods=['POST'])
 def extract_from_excel(dashboard_id):
@@ -508,15 +891,28 @@ def extract_from_excel(dashboard_id):
         user = User.query.get(session['user_id'])
         
         try:
-            print(f"Calling AI model API for Excel extraction: {filename}")
+            logger.info(f"Calling AI model API for Excel extraction: {filename}", extra={
+                'user_id': session['user_id'],
+                'dashboard_id': dashboard_id,
+                'excel_filename': filename
+            })
             # Call real AI model API for Excel extraction
             csv_data = call_aimodel_excel_api(user, excel_data, filename, prompt)
-            print(f"AI model API call successful, returned {len(csv_data)} characters")
+            logger.info(f"AI model API call successful, returned {len(csv_data)} characters", extra={
+                'user_id': session['user_id'],
+                'dashboard_id': dashboard_id,
+                'excel_filename': filename,
+                'csv_data_length': len(csv_data)
+            })
         except ValueError as e:
             # Handle missing API key or unsupported model
             return jsonify({'error': str(e)}), 400
         except Exception as e:
-            print(f"AI model API error: {str(e)}")
+            logger.error(f"AI model API error: {str(e)}", extra={
+                'user_id': session['user_id'],
+                'dashboard_id': dashboard_id,
+                'excel_filename': filename
+            })
             return jsonify({'error': f'Excel extraction failed: {str(e)}'}), 500
         
         return jsonify({
@@ -525,7 +921,10 @@ def extract_from_excel(dashboard_id):
         })
         
     except Exception as e:
-        print(f"General Excel processing error: {str(e)}")
+        logger.error(f"General Excel processing error: {str(e)}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id
+        })
         return jsonify({'error': f'Excel processing failed: {str(e)}'}), 500
 
 
@@ -558,9 +957,9 @@ def extract_text_from_pdf_data(pdf_data, filename, extraction_method='camelot', 
                     page_list = [int(p.strip()) for p in page_numbers.split(',') if p.strip().isdigit()]
                     if page_list:
                         pages_to_extract = ','.join(map(str, page_list))
-                        print(f"Extracting specific pages: {pages_to_extract}")
+                        logger.debug(f"Extracting specific pages: {pages_to_extract}")
                 except Exception as e:
-                    print(f"Error parsing page numbers '{page_numbers}': {e}")
+                    logger.warning(f"Error parsing page numbers '{page_numbers}': {e}")
                     pages_to_extract = 'all'
             
             if extraction_method == 'camelot':
@@ -570,7 +969,7 @@ def extract_text_from_pdf_data(pdf_data, filename, extraction_method='camelot', 
                 # Use PyPDF for text extraction
                 text_content = extract_with_pypdf(temp_file_path, filename, pages_to_extract)
             
-            print(f"Total extracted content: {len(text_content)} characters")
+            logger.debug(f"Total extracted content: {len(text_content)} characters")
             return text_content.strip()
             
         finally:
@@ -578,7 +977,7 @@ def extract_text_from_pdf_data(pdf_data, filename, extraction_method='camelot', 
             os.unlink(temp_file_path)
         
     except Exception as e:
-        print(f"Error extracting text from PDF {filename} with {extraction_method}: {str(e)}")
+        logger.error(f"Error extracting text from PDF {filename} with {extraction_method}: {str(e)}")
         return None
 
 def extract_with_camelot(temp_file_path, filename, pages='all'):
@@ -588,7 +987,7 @@ def extract_with_camelot(temp_file_path, filename, pages='all'):
     try:
         import camelot
         
-        print(f"Extracting tables from PDF using Camelot: {filename}, pages: {pages}")
+        logger.debug(f"Extracting tables from PDF using Camelot: {filename}, pages: {pages}")
         
         text_content = ""
         total_tables_found = 0
@@ -598,7 +997,7 @@ def extract_with_camelot(temp_file_path, filename, pages='all'):
             tables = camelot.read_pdf(temp_file_path, flavor='stream', pages=pages)
             if tables:
                 stream_tables = len(tables)
-                print(f"Stream method found {stream_tables} tables")
+                logger.debug(f"Stream method found {stream_tables} tables")
                 total_tables_found += stream_tables
                 
                 for table_num, table in enumerate(tables):
@@ -607,9 +1006,9 @@ def extract_with_camelot(temp_file_path, filename, pages='all'):
                         table_text = table.df.to_string(index=False)
                         text_content += table_text + "\n\n"
             else:
-                print("No tables found with stream method")
+                logger.debug("No tables found with stream method")
         except Exception as e:
-            print(f"Stream method failed: {e}")
+            logger.warning(f"Stream method failed: {e}")
         
         # If no tables found with stream, try lattice method
         if not text_content:            
@@ -617,7 +1016,7 @@ def extract_with_camelot(temp_file_path, filename, pages='all'):
                 tables = camelot.read_pdf(temp_file_path, flavor='lattice', pages=pages)
                 if tables:
                     lattice_tables = len(tables)
-                    print(f"Lattice method found {lattice_tables} tables")
+                    logger.debug(f"Lattice method found {lattice_tables} tables")
                     total_tables_found += lattice_tables
                     
                     for table_num, table in enumerate(tables):
@@ -626,21 +1025,21 @@ def extract_with_camelot(temp_file_path, filename, pages='all'):
                             table_text = table.df.to_string(index=False)
                             text_content += table_text + "\n\n"
                 else:
-                    print("No tables found with lattice method")
+                    logger.debug("No tables found with lattice method")
             except Exception as e:
-                print(f"Lattice method failed: {e}")
+                logger.warning(f"Lattice method failed: {e}")
         
-        print(f"Total tables found: {total_tables_found}")
+        logger.debug(f"Total tables found: {total_tables_found}")
         
         # If still no tables found, fallback to PyPDF
         if not text_content:
-            print("No tables found with Camelot, falling back to PyPDF text extraction...")
+            logger.debug("No tables found with Camelot, falling back to PyPDF text extraction...")
             text_content = extract_with_pypdf(temp_file_path, filename, pages)
         
         return text_content
         
     except Exception as e:
-        print(f"Camelot extraction failed: {e}")
+        logger.error(f"Camelot extraction failed: {e}")
         # Fallback to PyPDF
         return extract_with_pypdf(temp_file_path, filename, pages)
 
@@ -651,7 +1050,7 @@ def extract_with_pypdf(temp_file_path, filename, pages='all'):
     try:
         from PyPDF2 import PdfReader
         
-        print(f"Extracting text from PDF using PyPDF: {filename}, pages: {pages}")
+        logger.debug(f"Extracting text from PDF using PyPDF: {filename}, pages: {pages}")
         
         text_content = ""
         pdf_reader = PdfReader(temp_file_path)
@@ -674,12 +1073,12 @@ def extract_with_pypdf(temp_file_path, filename, pages='all'):
                 if page_text.strip():
                     text_content += f"--- Page {page_num + 1} Text ---\n"
                     text_content += page_text + "\n\n"
-                    print(f"Page {page_num + 1} text extracted ({len(page_text)} chars)")
+                    logger.debug(f"Page {page_num + 1} text extracted ({len(page_text)} chars)")
         
         return text_content
         
     except Exception as e:
-        print(f"PyPDF text extraction failed: {e}")
+        logger.error(f"PyPDF text extraction failed: {e}")
         return ""
 
 def call_aimodel_pdf_api(user, pdf_data, filename, prompt=""):
@@ -718,19 +1117,19 @@ def call_aimodel_pdf_api(user, pdf_data, filename, prompt=""):
     """
     
     # Extract text from PDF first
-    print(f"Extracting text from PDF: {filename}")
+    logger.debug(f"Extracting text from PDF: {filename}")
     extracted_text = extract_text_from_pdf_data(pdf_data, filename)
     
     if not extracted_text:
-        print(f"Failed to extract text from {filename}, using fallback")
+        logger.warning(f"Failed to extract text from {filename}, using fallback")
         return handle_large_pdf_fallback(filename, prompt)
     
-    print(f"Text extraction successful: {len(extracted_text)} characters")
-    print(f"Estimated tokens: {len(extracted_text) // 4}")
+    logger.debug(f"Text extraction successful: {len(extracted_text)} characters")
+    logger.debug(f"Estimated tokens: {len(extracted_text) // 4}")
     
     # Check if text is too large and needs chunking
     if len(extracted_text) > 50000:  # Conservative limit for text
-        print(f"Text too large ({len(extracted_text)} chars), using chunking approach")
+        logger.debug(f"Text too large ({len(extracted_text)} chars), using chunking approach")
         return process_large_text_with_chunking(api_key, extracted_text, filename, prompt, system_prompt, url, headers)
     
     # Build user message with extracted text
@@ -755,19 +1154,19 @@ def call_aimodel_pdf_api(user, pdf_data, filename, prompt=""):
         "max_tokens": 2000
     }
     
-    print(f"Sending request to DeepSeek API with {len(extracted_text)} characters of extracted text")
+    logger.debug(f"Sending request to DeepSeek API with {len(extracted_text)} characters of extracted text")
     
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=60)
-        print(f"DeepSeek API response status: {response.status_code}")
+        logger.debug(f"DeepSeek API response status: {response.status_code}")
         
         if response.status_code != 200:
-            print(f"DeepSeek API error response: {response.text}")
+            logger.error(f"DeepSeek API error response: {response.text}")
             response.raise_for_status()
         
         result = response.json()
         ai_response = result['choices'][0]['message']['content']
-        print(f"DeepSeek API response received: {len(ai_response)} characters")
+        logger.debug(f"DeepSeek API response received: {len(ai_response)} characters")
         
         # Extract CSV from response
         lines = ai_response.split('\n')
@@ -781,7 +1180,7 @@ def call_aimodel_pdf_api(user, pdf_data, filename, prompt=""):
         
         # If no CSV found, return a default structure
         if not csv_lines:
-            print("No CSV found in AI response, using default structure")
+            logger.warning("No CSV found in AI response, using default structure")
             csv_lines = [
                 "Date,Description,Amount,Category",
                 "2025-10-01,Sample Transaction,100.00,misc"
@@ -790,11 +1189,11 @@ def call_aimodel_pdf_api(user, pdf_data, filename, prompt=""):
         return '\n'.join(csv_lines)
         
     except requests.exceptions.RequestException as e:
-        print(f"DeepSeek API request failed: {str(e)}")
+        logger.error(f"DeepSeek API request failed: {str(e)}")
         # Fallback for API errors
         return handle_large_pdf_fallback(filename, prompt)
     except Exception as e:
-        print(f"DeepSeek API processing failed: {str(e)}")
+        logger.error(f"DeepSeek API processing failed: {str(e)}")
         # Fallback for other errors
         return handle_large_pdf_fallback(filename, prompt)
 
@@ -832,7 +1231,7 @@ def extract_data_from_excel(excel_data, filename):
         return text_content.strip()
         
     except Exception as e:
-        print(f"Error extracting data from Excel {filename}: {str(e)}")
+        logger.error(f"Error extracting data from Excel {filename}: {str(e)}")
         return None
 
 def call_aimodel_excel_api(user, excel_data, filename, prompt=""):
@@ -871,19 +1270,19 @@ def call_aimodel_excel_api(user, excel_data, filename, prompt=""):
     """
     
     # Extract data from Excel first
-    print(f"Extracting data from Excel: {filename}")
+    logger.debug(f"Extracting data from Excel: {filename}")
     extracted_data = extract_data_from_excel(excel_data, filename)
     
     if not extracted_data:
-        print(f"Failed to extract data from {filename}, using fallback")
+        logger.warning(f"Failed to extract data from {filename}, using fallback")
         return handle_large_excel_fallback(filename, prompt)
     
-    print(f"Data extraction successful: {len(extracted_data)} characters")
-    print(f"Estimated tokens: {len(extracted_data) // 4}")
+    logger.debug(f"Data extraction successful: {len(extracted_data)} characters")
+    logger.debug(f"Estimated tokens: {len(extracted_data) // 4}")
     
     # Check if data is too large and needs chunking
     if len(extracted_data) > 50000:  # Conservative limit for text
-        print(f"Data too large ({len(extracted_data)} chars), using chunking approach")
+        logger.debug(f"Data too large ({len(extracted_data)} chars), using chunking approach")
         return process_large_excel_with_chunking(api_key, extracted_data, filename, prompt, system_prompt, url, headers)
     
     # Build user message with extracted data
@@ -908,19 +1307,19 @@ def call_aimodel_excel_api(user, excel_data, filename, prompt=""):
         "max_tokens": 2000
     }
     
-    print(f"Sending request to DeepSeek API with {len(extracted_data)} characters of extracted data")
+    logger.debug(f"Sending request to DeepSeek API with {len(extracted_data)} characters of extracted data")
     
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
-        print(f"DeepSeek API response status: {response.status_code}")
+        logger.debug(f"DeepSeek API response status: {response.status_code}")
         
         if response.status_code != 200:
-            print(f"DeepSeek API error response: {response.text}")
+            logger.error(f"DeepSeek API error response: {response.text}")
             response.raise_for_status()
         
         result = response.json()
         ai_response = result['choices'][0]['message']['content']
-        print(f"DeepSeek API response received: {len(ai_response)} characters")
+        logger.debug(f"DeepSeek API response received: {len(ai_response)} characters")
         
         # Extract CSV from response
         lines = ai_response.split('\n')
@@ -934,7 +1333,7 @@ def call_aimodel_excel_api(user, excel_data, filename, prompt=""):
         
         # If no CSV found, return a default structure
         if not csv_lines:
-            print("No CSV found in AI response, using default structure")
+            logger.warning("No CSV found in AI response, using default structure")
             csv_lines = [
                 "Date,Description,Amount,Category",
                 "2025-10-01,Sample Transaction,100.00,misc"
@@ -943,11 +1342,11 @@ def call_aimodel_excel_api(user, excel_data, filename, prompt=""):
         return '\n'.join(csv_lines)
         
     except requests.exceptions.RequestException as e:
-        print(f"DeepSeek API request failed: {str(e)}")
+        logger.error(f"DeepSeek API request failed: {str(e)}")
         # Fallback for API errors
         return handle_large_excel_fallback(filename, prompt)
     except Exception as e:
-        print(f"DeepSeek API processing failed: {str(e)}")
+        logger.error(f"DeepSeek API processing failed: {str(e)}")
         # Fallback for other errors
         return handle_large_excel_fallback(filename, prompt)
 
@@ -1026,7 +1425,7 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         3. Return the processed CSV data
         4. Provide a brief explanation of what you did
         
-        Always return valid CSV format. Keep the same column structure unless explicitly requested to change it.
+        Always return valid CSV format with these columns: Date, Description, Amount, Category.
         For categorization, use these categories: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation.
         
         Example responses:
@@ -1063,20 +1462,22 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         "max_tokens": 2000
     }
     
-    print(f"Sending request to {model_config['name']} API with {len(conversation_history)} conversation turns")
-    print(f"Is initial extraction: {is_initial_extraction}")
+    logger.debug(f"Sending request to {model_config['name']} API with {len(conversation_history)} conversation turns", extra={
+        'is_initial_extraction': is_initial_extraction,
+        'conversation_turns': len(conversation_history)
+    })
     
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=60)
-        print(f"API response status: {response.status_code}")
+        logger.debug(f"API response status: {response.status_code}")
         
         if response.status_code != 200:
-            print(f"API error response: {response.text}")
+            logger.error(f"API error response: {response.text}")
             response.raise_for_status()
         
         result = response.json()
         ai_response = result['choices'][0]['message']['content']
-        print(f"API response received: {len(ai_response)} characters")
+        logger.debug(f"API response received: {len(ai_response)} characters")
         
         # Extract CSV from response - improved logic to separate explanation from CSV
         lines = ai_response.split('\n')
@@ -1113,7 +1514,7 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         
         # If no CSV found, try alternative CSV detection
         if not csv_lines:
-            print("No CSV found with header detection, trying alternative detection")
+            logger.debug("No CSV found with header detection, trying alternative detection")
             for line in lines:
                 line = line.strip()
                 # Look for lines that have CSV-like structure (comma-separated with dates/amounts)
@@ -1131,7 +1532,7 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         
         # If still no CSV found, return a default structure
         if not csv_lines:
-            print("No CSV found in AI response, using default structure")
+            logger.warning("No CSV found in AI response, using default structure")
             csv_lines = [
                 "Date,Description,Amount,Category",
                 "2025-10-01,Sample Transaction,100.00,misc"
@@ -1156,12 +1557,12 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         return csv_data, explanation
         
     except requests.exceptions.RequestException as e:
-        print(f"API request failed: {str(e)}")
+        logger.error(f"API request failed: {str(e)}")
         # Fallback for API errors
         fallback_csv = "Date,Description,Amount,Category\n2025-10-01,API Error - Please try again,0.00,misc"
         return fallback_csv, "AI processing failed. Please try again."
     except Exception as e:
-        print(f"API processing failed: {str(e)}")
+        logger.error(f"API processing failed: {str(e)}")
         # Fallback for other errors
         fallback_csv = "Date,Description,Amount,Category\n2025-10-01,Processing Error - Please try again,0.00,misc"
         return fallback_csv, "AI processing failed. Please try again."
@@ -1509,24 +1910,43 @@ def create_expense(dashboard_id):
     data = request.get_json()
     
     try:
+        # Validate expense data using security validation function
+        validated_data = validate_expense_data(data)
+        
         expense = Expense(
             dashboard_id=dashboard_id,
             user_id=session['user_id'],
-            date=datetime.strptime(data['date'], '%Y-%m-%d').date(),
-            description=data['description'],
-            amount=float(data['amount']),
-            category=data.get('category', 'misc')
+            date=datetime.strptime(validated_data['date'], '%Y-%m-%d').date(),
+            description=validated_data['description'],
+            amount=float(validated_data['amount']),
+            category=validated_data.get('category', 'misc')
         )
         db.session.add(expense)
         db.session.commit()
-
+        
+        # Log the expense creation
+        logger.info(f"Expense created: {expense.description} - ${expense.amount}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'expense_id': expense.id
+        })
         
         return jsonify({
             'message': 'Expense created successfully',
             'expense_id': expense.id
         })
         
+    except ValueError as e:
+        logger.warning(f"Expense validation failed: {e}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id
+        })
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.error(f"Failed to create expense: {str(e)}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id
+        })
         return jsonify({'error': f'Failed to create expense: {str(e)}'}), 400
 
 @app.route('/api/dashboard/<int:dashboard_id>/expenses/<int:expense_id>', methods=['PUT'])
@@ -1577,18 +1997,28 @@ def update_expense(dashboard_id, expense_id):
     data = request.get_json()
     
     try:
+        # Validate expense data using security validation function
+        validated_data = validate_expense_data(data)
+        
         # Update fields if provided
-        if 'date' in data:
-            expense.date = datetime.strptime(data['date'], '%Y-%m-%d').date()
-        if 'description' in data:
-            expense.description = data['description']
-        if 'amount' in data:
-            expense.amount = float(data['amount'])
-        if 'category' in data:
-            expense.category = data['category']
+        if 'date' in validated_data:
+            expense.date = datetime.strptime(validated_data['date'], '%Y-%m-%d').date()
+        if 'description' in validated_data:
+            expense.description = validated_data['description']
+        if 'amount' in validated_data:
+            expense.amount = float(validated_data['amount'])
+        if 'category' in validated_data:
+            expense.category = validated_data['category']
         
         expense.updated_at = datetime.utcnow()
         db.session.commit()
+        
+        # Log the expense update
+        logger.info(f"Expense updated: {expense.description} - ${expense.amount}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'expense_id': expense.id
+        })
         
         return jsonify({
             'message': 'Expense updated successfully',
@@ -1601,8 +2031,20 @@ def update_expense(dashboard_id, expense_id):
             }
         })
         
+    except ValueError as e:
+        logger.warning(f"Expense validation failed: {e}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'expense_id': expense_id
+        })
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Failed to update expense: {str(e)}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'expense_id': expense_id
+        })
         return jsonify({'error': f'Failed to update expense: {str(e)}'}), 400
 
 @app.route('/api/dashboard/<int:dashboard_id>/expenses/<int:expense_id>', methods=['DELETE'])
@@ -1661,8 +2103,55 @@ def delete_expense(dashboard_id, expense_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"Error deleting expense {expense_id}: {str(e)}")
+        logger.error(f"Error deleting expense {expense_id}: {str(e)}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'expense_id': expense_id
+        })
         return jsonify({'error': f'Failed to delete expense: {str(e)}'}), 400
+
+# CSV Export Endpoint with Formula Injection Protection
+@app.route('/api/dashboard/<int:dashboard_id>/export/csv', methods=['GET'])
+def export_expenses_csv(dashboard_id):
+    """Export expenses as CSV with formula injection protection"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id, 
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    # Get expenses
+    expenses = Expense.query.filter_by(dashboard_id=dashboard_id).all()
+    
+    # Build CSV data
+    csv_lines = ['Date,Description,Amount,Category,User']
+    
+    for expense in expenses:
+        csv_lines.append(
+            f"{expense.date.isoformat()},{expense.description},{expense.amount},{expense.category},{expense.user.name}"
+        )
+    
+    csv_data = '\n'.join(csv_lines)
+    
+    # Sanitize CSV data to prevent formula injection
+    sanitized_csv = sanitize_csv_for_export(csv_data)
+    
+    # Log the export
+    logger.info(f"CSV export generated for dashboard {dashboard_id}", extra={
+        'user_id': session['user_id'],
+        'dashboard_id': dashboard_id,
+        'expense_count': len(expenses)
+    })
+    
+    return jsonify({
+        'csv_data': sanitized_csv,
+        'filename': f'expenses_dashboard_{dashboard_id}_{datetime.now().strftime("%Y%m%d")}.csv'
+    })
 
 # Pivot Table Endpoint
 @app.route('/api/dashboard/<int:dashboard_id>/pivot', methods=['GET'])

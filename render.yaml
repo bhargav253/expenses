@@ -12,3 +12,19 @@ services:
         value: your-google-client-id-here
       - key: GOOGLE_CLIENT_SECRET
         value: your-google-client-secret-here
+      - key: AI_MOCK_MODE
+        value: "false"
+      - key: PDF_UPLOAD_RATE_LIMIT
+        value: "5/minute"
+      - key: AI_PROCESSING_RATE_LIMIT
+        value: "10/minute"
+      - key: LOGIN_RATE_LIMIT
+        value: "5/minute"
+      - key: GENERAL_API_RATE_LIMIT
+        value: "100/hour"
+      - key: MAX_FILE_SIZE_MB
+        value: "10"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: LOG_FORMAT
+        value: "json"

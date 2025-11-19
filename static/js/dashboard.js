@@ -35,10 +35,19 @@ class DashboardManager {
         
         // Setup AI file upload
         const aiFileInput = document.getElementById('aiFileInput');
+        const chooseFileBtn = document.getElementById('chooseFileBtn');
         const cancelAIBtn = document.getElementById('cancelAI');
         
         if (aiFileInput) {
             aiFileInput.addEventListener('change', this.handleAIUpload.bind(this));
+        }
+        
+        // Setup choose file button
+        if (chooseFileBtn) {
+            chooseFileBtn.addEventListener('click', () => {
+                debug.log('Choose file button clicked');
+                aiFileInput.click();
+            });
         }
         
         if (cancelAIBtn) {
@@ -53,6 +62,7 @@ class DashboardManager {
             button.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const option = card.getAttribute('data-option');
+                debug.log('Option card button clicked:', option);
                 this.selectOption(option);
             });
             
@@ -60,6 +70,7 @@ class DashboardManager {
             card.addEventListener('click', (e) => {
                 if (e.target.tagName !== 'BUTTON') {
                     const option = card.getAttribute('data-option');
+                    debug.log('Option card clicked:', option);
                     this.selectOption(option);
                 }
             });
@@ -67,7 +78,7 @@ class DashboardManager {
     }
     
     selectOption(option) {
-        console.log('Selected option:', option);
+        debug.log('Selected option:', option);
         
         // Hide all option cards
         const optionCards = document.querySelectorAll('.option-card');
@@ -143,7 +154,7 @@ class DashboardManager {
         // Clear localStorage for this dashboard
         const localStorageKey = `pdf_extraction_${this.dashboardId}`;
         localStorage.removeItem(localStorageKey);
-        console.log('Cleared localStorage on cancel:', localStorageKey);
+        debug.log('Cleared localStorage on cancel:', localStorageKey);
         
         Utils.showNotification('Upload cancelled', 'info');
     }
@@ -153,11 +164,12 @@ class DashboardManager {
         if (!file) {
             // User clicked the AI card but hasn't selected a file yet
             // Just show the upload interface and wait for file selection
+            debug.log('AI upload interface shown, waiting for file selection');
             return;
         }
         
         const fileType = this.detectFileType(file);
-        console.log('AI processing - File type detected:', fileType);
+        debug.log('AI processing - File type detected:', fileType);
         
         if (!fileType) {
             Utils.showNotification('Unsupported file type. Please upload CSV, Excel, or PDF files only.', 'warning');
@@ -170,7 +182,7 @@ class DashboardManager {
         // Clear localStorage for this dashboard when new file is uploaded
         const localStorageKey = `pdf_extraction_${this.dashboardId}`;
         localStorage.removeItem(localStorageKey);
-        console.log('Cleared localStorage for new file upload:', localStorageKey);
+        debug.log('Cleared localStorage for new file upload:', localStorageKey);
         
         // Store file info for later processing
         this.currentFile = file;
@@ -203,7 +215,7 @@ class DashboardManager {
             this.showCsvPreview(csvText);
             
         } catch (error) {
-            console.error('CSV processing error:', error);
+            debug.error('CSV processing error:', error);
             this.addAiChatMessage('assistant', 'Sorry, I encountered an error processing your CSV file. Please try again.');
         }
     }
@@ -283,7 +295,7 @@ class DashboardManager {
             }
             
         } catch (error) {
-            console.error('PDF processing error:', error);
+            debug.error('PDF processing error:', error);
             Utils.showNotification('Error processing PDF with AI. Please try again or use Google Sheets copy instead.', 'danger');
             this.resetUploadUI();
         }
@@ -361,7 +373,7 @@ class DashboardManager {
             }
             
         } catch (error) {
-            console.error('AI chat processing error:', error);
+            debug.error('AI chat processing error:', error);
             this.addAiChatMessage('assistant', 'Sorry, I encountered an error processing your request. Please try again.');
         } finally {
             Utils.hideLoading(sendBtn);
@@ -381,11 +393,11 @@ class DashboardManager {
                 // Check if the stored filename matches the current file
                 if (state.filename === file.name) {
                     extractionId = state.extraction_id;
-                    console.log('Using existing extraction_id from localStorage:', extractionId);
+                    debug.log('Using existing extraction_id from localStorage:', extractionId);
                 } else {
                     // Different file, clear old state
                     localStorage.removeItem(localStorageKey);
-                    console.log('New file detected, clearing old extraction state');
+                    debug.log('New file detected, clearing old extraction state');
                 }
             }
             
@@ -397,7 +409,7 @@ class DashboardManager {
                 const extractionMethod = document.getElementById('pdfExtractionMethod').value;
                 const pageNumbers = document.getElementById('pdfPageNumbers').value.trim();
                 
-                console.log('PDF extraction settings:', {
+                debug.log('PDF extraction settings:', {
                     method: extractionMethod,
                     pageNumbers: pageNumbers
                 });
@@ -452,9 +464,9 @@ class DashboardManager {
                     page_numbers: pageNumbers
                 }));
                 
-                console.log('PDF extraction completed, stored extraction_id:', extractionId);
+                debug.log('PDF extraction completed, stored extraction_id:', extractionId);
             } else {
-                console.log('Using existing extraction_id for chat:', extractionId);
+                debug.log('Using existing extraction_id for chat:', extractionId);
             }
             
             // Step 2: Process chat with the extraction_id
@@ -491,7 +503,7 @@ class DashboardManager {
             }
             
         } catch (error) {
-            console.error('PDF conversational processing error:', error);
+            debug.error('PDF conversational processing error:', error);
             this.addAiChatMessage('assistant', 'Error processing PDF with AI. Please try again.');
             this.resetUploadUI();
         }
@@ -572,7 +584,7 @@ class DashboardManager {
             }
             
         } catch (error) {
-            console.error('PDF processing error:', error);
+            debug.error('PDF processing error:', error);
             this.addAiChatMessage('assistant', 'Error processing PDF with AI. Please try again.');
             this.resetUploadUI();
         }
@@ -636,13 +648,14 @@ class DashboardManager {
             }
             
         } catch (error) {
-            console.error('Excel processing error:', error);
+            debug.error('Excel processing error:', error);
             this.addAiChatMessage('assistant', 'Error processing Excel with AI. Please try again.');
             this.resetUploadUI();
         }
     }
     
     async processCsvWithPrompt(prompt) {
+	debug.log('processing CSV with prompt');	
         try {
             if (!this.currentSessionId) {
                 // Create AI session first
@@ -669,7 +682,7 @@ class DashboardManager {
             }
             
         } catch (error) {
-            console.error('AI processing error:', error);
+            debug.error('AI processing error:', error);
             this.addAiChatMessage('assistant', 'Sorry, I encountered an error processing your request. Please try again.');
         }
     }
@@ -766,7 +779,7 @@ class DashboardManager {
             }
             
         } catch (error) {
-            console.error('PDF processing error:', error);
+            debug.error('PDF processing error:', error);
             Utils.showNotification('Error processing PDF with AI. Please try again or use Google Sheets copy instead.', 'danger');
             this.resetUploadUI();
         }
@@ -799,7 +812,7 @@ class DashboardManager {
             
             Utils.showNotification('Google Sheets data processed successfully', 'success');
         } catch (error) {
-            console.error('Error processing Google Sheets data:', error);
+            debug.error('Error processing Google Sheets data:', error);
             Utils.showNotification('Error processing Google Sheets data', 'danger');
         }
     }
@@ -1092,17 +1105,17 @@ class DashboardManager {
             let savedCount = 0;
             for (const expense of expenses) {
                 try {
-                    console.log('Attempting to save expense:', expense);
+                    debug.log('Attempting to save expense:', expense);
                     const result = await ApiClient.expenses.create(this.dashboardId, expense);
-                    console.log('Save result:', result);
+                    debug.log('Save result:', result);
                     savedCount++;
                 } catch (error) {
-                    console.error('Error saving expense:', error);
-                    console.error('Error details:', error.message);
+                    debug.error('Error saving expense:', error);
+                    debug.error('Error details:', error.message);
                 }
             }
             
-            console.log(`Total expenses saved: ${savedCount}`);
+            debug.log(`Total expenses saved: ${savedCount}`);
             Utils.showNotification(`Successfully saved ${savedCount} expenses to the database`, 'success');
             
             // Hide the editable section
@@ -1112,7 +1125,7 @@ class DashboardManager {
             }
             
         } catch (error) {
-            console.error('Error saving expenses:', error);
+            debug.error('Error saving expenses:', error);
             Utils.showNotification('Error saving expenses to database', 'danger');
         }
     }
@@ -1192,30 +1205,30 @@ class DashboardManager {
             let savedCount = 0;
             for (const expense of expenses) {
                 try {
-                    console.log('Attempting to save expense (direct):', expense);
+                    debug.log('Attempting to save expense (direct):', expense);
                     const result = await ApiClient.expenses.create(this.dashboardId, expense);
-                    console.log('Save result (direct):', result);
+                    debug.log('Save result (direct):', result);
                     savedCount++;
                 } catch (error) {
-                    console.error('Error saving expense (direct):', error);
-                    console.error('Error details (direct):', error.message);
+                    debug.error('Error saving expense (direct):', error);
+                    debug.error('Error details (direct):', error.message);
                 }
             }
             
-            console.log(`Total expenses saved (direct): ${savedCount}`);
+            debug.log(`Total expenses saved (direct): ${savedCount}`);
             Utils.showNotification(`Successfully saved ${savedCount} expenses to the database`, 'success');
             
             // Refresh all components after data ingress
             await this.refreshAllComponents();
             
         } catch (error) {
-            console.error('Error saving CSV data:', error);
+            debug.error('Error saving CSV data:', error);
             Utils.showNotification('Error saving data to database', 'danger');
         }
     }
 
     async refreshAllComponents() {
-        console.log('Refreshing all dashboard components after data ingress');
+        debug.log('Refreshing all dashboard components after data ingress');
         
         try {
             // 1. Refresh month dropdown
@@ -1236,7 +1249,7 @@ class DashboardManager {
             Utils.showNotification('All dashboard components refreshed with new data', 'success');
             
         } catch (error) {
-            console.error('Error refreshing components:', error);
+            debug.error('Error refreshing components:', error);
             Utils.showNotification('Error refreshing dashboard components', 'danger');
         }
     }
@@ -1272,10 +1285,10 @@ class DashboardManager {
 
 
     initMonthlyTable(selectedMonth = null) {
-        console.log('=== initMonthlyTable() called with selectedMonth:', selectedMonth, '===');
+        debug.log('=== initMonthlyTable() called with selectedMonth:', selectedMonth, '===');
         const container = document.getElementById('monthlyExpensesTable');
         if (!container) {
-            console.error('Monthly table container not found!');
+            debug.error('Monthly table container not found!');
             return;
         }
 
@@ -1337,21 +1350,21 @@ class DashboardManager {
                     'row_above': {
                         name: 'Insert row above',
                         callback: (key, selection) => {
-                            console.log('Insert row above context menu triggered:', selection);
+                            debug.log('Insert row above context menu triggered:', selection);
                             this.handleRowAddition(selection);
                         }
                     },
                     'row_below': {
                         name: 'Insert row below',
                         callback: (key, selection) => {
-                            console.log('Insert row below context menu triggered:', selection);
+                            debug.log('Insert row below context menu triggered:', selection);
                             this.handleRowAddition(selection);
                         }
                     },
                     'remove_row': {
                         name: 'Remove row',
                         callback: (key, selection) => {
-                            console.log('Remove row context menu triggered:', selection);
+                            debug.log('Remove row context menu triggered:', selection);
                             this.handleRowRemoval(selection);
                         }
                     },
@@ -1364,7 +1377,7 @@ class DashboardManager {
             licenseKey: 'non-commercial-and-evaluation',
             height: 400, // Fixed height to prevent ResizeObserver issues
             afterChange: (changes, source) => {
-                console.log('Handsontable afterChange called:', { 
+                debug.log('Handsontable afterChange called:', { 
                     changes: changes, 
                     source: source,
                     tableData: this.monthlyTable ? this.monthlyTable.getData() : 'No table'
@@ -1372,8 +1385,8 @@ class DashboardManager {
                 
                 // Only process user edits, ignore programmatic changes
                 if (source === 'edit' && changes && changes.length > 0) {
-                    console.log('Valid user edit detected, processing individual changes');
-                    console.log('Changes details:', changes);
+                    debug.log('Valid user edit detected, processing individual changes');
+                    debug.log('Changes details:', changes);
                     
                     // Process each change individually
                     changes.forEach(change => {
@@ -1390,14 +1403,14 @@ class DashboardManager {
                                 category: rowData[1]
                             };
                             
-                            console.log('Calling updateMonthlyChanges for row ID:', rowId, 'with data:', expenseData);
+                            debug.log('Calling updateMonthlyChanges for row ID:', rowId, 'with data:', expenseData);
                             this.updateMonthlyChanges(rowId, expenseData);
                         } else {
-                            console.log('No row ID found for row:', row, 'skipping update');
+                            debug.log('No row ID found for row:', row, 'skipping update');
                         }
                     });
                 } else if (source !== 'loadData' && source !== 'autofill' && source !== 'empty') {
-                    console.log('Ignoring non-edit change:', {
+                    debug.log('Ignoring non-edit change:', {
                         source: source,
                         changesCount: changes ? changes.length : 0,
                         changes: changes
@@ -1407,46 +1420,46 @@ class DashboardManager {
             
             // Add additional event listeners for better change detection
             afterBeginEditing: (row, column) => {
-                console.log('Cell editing started:', { row, column });
+                debug.log('Cell editing started:', { row, column });
             },
             
             afterSelection: (row, column, row2, column2, preventScrolling) => {
-                console.log('Cell selected:', { row, column });
+                debug.log('Cell selected:', { row, column });
             },
             
         });
 
         // If a month is selected, load data for that month
         if (selectedMonth) {
-            console.log('Loading data for selected month:', selectedMonth);
+            debug.log('Loading data for selected month:', selectedMonth);
             this.refreshMonthlyData(selectedMonth);
         } else {
-            console.log('No month selected, table remains empty');
+            debug.log('No month selected, table remains empty');
         }
 
     }
 
     async setupMonthDropdown() {
-        console.log('=== setupMonthDropdown() called ===');
+        debug.log('=== setupMonthDropdown() called ===');
         const dropdownMenu = document.getElementById('monthDropdownMenu');
         const dropdownButton = document.getElementById('monthDropdown');
         
         if (!dropdownMenu || !dropdownButton) {
-            console.error('Dropdown elements not found!');
+            debug.error('Dropdown elements not found!');
             return null;
         }
         
         try {
-            console.log('Setting up month dropdown from database...');
+            debug.log('Setting up month dropdown from database...');
             const months = await this.getAvailableMonthsFromDb();
-            console.log('Months from database:', months);
+            debug.log('Months from database:', months);
             
             let menuHtml = '';
             let selectedMonth = null;
             
             // If no months in database, keep dropdown blank
             if (months.length === 0) {
-                console.log('No months found in database, keeping dropdown blank');
+                debug.log('No months found in database, keeping dropdown blank');
                 menuHtml = '<li><a class="dropdown-item disabled" href="#">No data available</a></li>';
                 dropdownButton.innerHTML = '<i class="fas fa-calendar me-1"></i>Select Month';
             } else {
@@ -1460,7 +1473,7 @@ class DashboardManager {
                 // Set default to first available month
                 selectedMonth = months[0].value;
                 const defaultMonthLabel = months[0].label;
-                console.log('Setting default month to:', selectedMonth, 'label:', defaultMonthLabel);
+                debug.log('Setting default month to:', selectedMonth, 'label:', defaultMonthLabel);
                 dropdownButton.innerHTML = `<i class="fas fa-calendar me-1"></i>${defaultMonthLabel}`;
             }
             
@@ -1472,7 +1485,7 @@ class DashboardManager {
                 item.addEventListener('click', (e) => {
                     e.preventDefault();
                     const selectedMonth = e.target.getAttribute('data-month');
-                    console.log('Month selected from dropdown:', selectedMonth);
+                    debug.log('Month selected from dropdown:', selectedMonth);
                     this.handleMonthChange(selectedMonth);
                     dropdownButton.innerHTML = `<i class="fas fa-calendar me-1"></i>${e.target.textContent}`;
                 });
@@ -1481,7 +1494,7 @@ class DashboardManager {
             return selectedMonth;
             
         } catch (error) {
-            console.error('Error setting up month dropdown:', error);
+            debug.error('Error setting up month dropdown:', error);
             // On error, keep dropdown blank
             dropdownMenu.innerHTML = '<li><a class="dropdown-item disabled" href="#">Error loading months</a></li>';
             dropdownButton.innerHTML = '<i class="fas fa-calendar me-1"></i>Select Month';
@@ -1491,19 +1504,19 @@ class DashboardManager {
 
 
     async setupUserDropdown() {
-        console.log('=== setupUserDropdown() called ===');
+        debug.log('=== setupUserDropdown() called ===');
         const dropdownMenu = document.getElementById('userDropdownMenu');
         const dropdownButton = document.getElementById('userDropdown');
         
         if (!dropdownMenu || !dropdownButton) {
-            console.error('User dropdown elements not found!');
+            debug.error('User dropdown elements not found!');
             return;
         }
         
         try {
-            console.log('Setting up user dropdown from dashboard members...');
+            debug.log('Setting up user dropdown from dashboard members...');
             const users = await this.getDashboardUsers();
-            console.log('Dashboard users:', users);
+            debug.log('Dashboard users:', users);
             
             let menuHtml = '';
             
@@ -1535,7 +1548,7 @@ class DashboardManager {
                     
                     const selectedUserId = e.target.getAttribute('data-user-id');
                     const selectedUserName = e.target.textContent;
-                    console.log('User selected from dropdown:', selectedUserId, selectedUserName);
+                    debug.log('User selected from dropdown:', selectedUserId, selectedUserName);
                     
                     this.handleUserChange(selectedUserId);
                     dropdownButton.innerHTML = `<i class="fas fa-user me-1"></i>${selectedUserName}`;
@@ -1543,7 +1556,7 @@ class DashboardManager {
             });
             
         } catch (error) {
-            console.error('Error setting up user dropdown:', error);
+            debug.error('Error setting up user dropdown:', error);
             // On error, keep dropdown with default option
             dropdownMenu.innerHTML = '<li><a class="dropdown-item active" href="#" data-user-id="all">All Users</a></li>';
         }
@@ -1558,7 +1571,7 @@ class DashboardManager {
             }
             
             const members = await response.json();
-            console.log('Dashboard members from API:', members);
+            debug.log('Dashboard members from API:', members);
             
             // Extract unique users from members
             const users = [];
@@ -1574,11 +1587,11 @@ class DashboardManager {
                 }
             });
             
-            console.log('Unique users:', users);
+            debug.log('Unique users:', users);
             return users;
             
         } catch (error) {
-            console.error('Error getting dashboard users:', error);
+            debug.error('Error getting dashboard users:', error);
             // Fallback: return current user only
             return [{
                 id: window.currentUserId || 1,
@@ -1603,7 +1616,7 @@ class DashboardManager {
     }
 
     handleUserChange(selectedUserId) {
-        console.log('Selected user:', selectedUserId);
+        debug.log('Selected user:', selectedUserId);
         // Refresh the table with the selected user filter
         const selectedMonth = this.getSelectedMonthFromDropdown();
         this.refreshMonthlyData(selectedMonth, selectedUserId);
@@ -1612,22 +1625,22 @@ class DashboardManager {
 
     async getAvailableMonthsFromDb() {
         try {
-            console.log('Fetching expenses from API for dashboard:', this.dashboardId);
+            debug.log('Fetching expenses from API for dashboard:', this.dashboardId);
             const expenses = await ApiClient.expenses.get(this.dashboardId);
-            console.log('Raw expenses from API:', expenses);
+            debug.log('Raw expenses from API:', expenses);
             
             // Extract unique months from expenses
             const availableMonths = new Set();
             expenses.forEach(expense => {
-                console.log('Processing expense:', expense);
+                debug.log('Processing expense:', expense);
                 if (expense.date) {
                     const month = expense.date.substring(0, 7); // YYYY-MM
-                    console.log('Extracted month:', month, 'from date:', expense.date);
+                    debug.log('Extracted month:', month, 'from date:', expense.date);
                     availableMonths.add(month);
                 }
             });
             
-            console.log('Available months set:', availableMonths);
+            debug.log('Available months set:', availableMonths);
             
             // Convert to array and sort (newest first)
             const months = Array.from(availableMonths)
@@ -1643,14 +1656,14 @@ class DashboardManager {
                         month: 'long',
                         timeZone: 'UTC' 
                     });
-                    console.log('Month object:', { value: month, label, year, monthNum, date: date.toString() });
+                    debug.log('Month object:', { value: month, label, year, monthNum, date: date.toString() });
                     return { value: month, label };
                 });
             
-            console.log('Final months array:', months);
+            debug.log('Final months array:', months);
             return months;
         } catch (error) {
-            console.error('Error getting months from database:', error);
+            debug.error('Error getting months from database:', error);
             return [];
         }
     }
@@ -1670,12 +1683,12 @@ class DashboardManager {
     }
 
     handleMonthChange(selectedMonth) {
-        console.log('Selected month:', selectedMonth);
+        debug.log('Selected month:', selectedMonth);
         // Clear the current table and reload with data for the selected month
         if (this.monthlyTable) {
             // Clear the table first - use loadData with empty array
             this.monthlyTable.loadData([]);
-            console.log('clearing monthly table - loadData([]) called');
+            debug.log('clearing monthly table - loadData([]) called');
         }
         
         // Load data for the selected month
@@ -1684,7 +1697,7 @@ class DashboardManager {
     }
 
     async handleRowRemoval(selection) {
-        console.log('handleRowRemoval called with selection:', selection);
+        debug.log('handleRowRemoval called with selection:', selection);
         
         try {
             const selectedMonth = this.getSelectedMonthFromDropdown();
@@ -1695,19 +1708,19 @@ class DashboardManager {
             
             // Get the row index that was removed
             const removedRowIndex = selection[0].start.row;
-            console.log('Removing row at index:', removedRowIndex);
+            debug.log('Removing row at index:', removedRowIndex);
             
             // Get the expense ID directly from the Handsontable data
             if (this.monthlyTable) {
                 const rowData = this.monthlyTable.getDataAtRow(removedRowIndex);
-                console.log('Row data at index', removedRowIndex, ':', rowData);
+                debug.log('Row data at index', removedRowIndex, ':', rowData);
                 
                 // The expense ID should be in the last column (use -1 indexing like Python)
                 const expenseId = rowData[rowData.length - 1];
-                console.log('Expense ID from table (last column):', expenseId);
+                debug.log('Expense ID from table (last column):', expenseId);
                 
                 if (expenseId) {
-                    console.log('Deleting expense with ID:', expenseId);
+                    debug.log('Deleting expense with ID:', expenseId);
                     await ApiClient.expenses.delete(this.dashboardId, expenseId);
                     Utils.showNotification('Expense deleted successfully', 'success');
                     
@@ -1716,21 +1729,21 @@ class DashboardManager {
                     
                     // Update category breakdown from current table data
                     const currentTableData = this.monthlyTable.getData();
-                    console.log('=== DEBUG: Current table data after row removal ===');
-                    console.log('Number of rows:', currentTableData.length);
-                    console.log('Expense IDs in table:', currentTableData.map(row => row[row.length - 1]));
-                    console.log('Table data structure:', currentTableData);
+                    debug.log('=== DEBUG: Current table data after row removal ===');
+                    debug.log('Number of rows:', currentTableData.length);
+                    debug.log('Expense IDs in table:', currentTableData.map(row => row[row.length - 1]));
+                    debug.log('Table data structure:', currentTableData);
                     this.updateCategoryBreakdownFromTableData(currentTableData);
 
                     // Refresh yearly table to reflect the changes
                     await this.initYearlyTable();
                 } else {
-                    console.error('No expense ID found in row data');
+                    debug.error('No expense ID found in row data');
                     Utils.showNotification('Error: Could not find expense ID', 'danger');
                 }
             }
         } catch (error) {
-            console.error('Error handling row removal:', error);
+            debug.error('Error handling row removal:', error);
             
             // Handle 403 Forbidden errors specifically
             if (error.status === 403) {
@@ -1743,14 +1756,14 @@ class DashboardManager {
 
     async refreshMonthlyData(month = null, userId = null) {
         try {
-            console.log('refreshMonthlyData called with month:', month, 'and user:', userId);
+            debug.log('refreshMonthlyData called with month:', month, 'and user:', userId);
             const expenses = await ApiClient.expenses.get(this.dashboardId);
-            console.log('Fetched expenses from API:', expenses);
+            debug.log('Fetched expenses from API:', expenses);
             
             // Filter by month if specified
             let filteredExpenses = expenses;
             if (month) {
-                console.log('Filtering for month:', month);
+                debug.log('Filtering for month:', month);
                 filteredExpenses = expenses.filter(expense => {
                     const expenseMonth = expense.date.substring(0, 7); // YYYY-MM
                     return expenseMonth === month;
@@ -1759,13 +1772,13 @@ class DashboardManager {
             
             // Filter by user if specified (not "all")
             if (userId && userId !== 'all') {
-                console.log('Filtering for user:', userId);
+                debug.log('Filtering for user:', userId);
                 filteredExpenses = filteredExpenses.filter(expense => {
                     return expense.user_id == userId;
                 });
             }
             
-            console.log('Filtered expenses for month', month, 'and user', userId, ':', filteredExpenses);
+            debug.log('Filtered expenses for month', month, 'and user', userId, ':', filteredExpenses);
             
             // Update Handsontable with new data
             if (this.monthlyTable) {
@@ -1778,14 +1791,14 @@ class DashboardManager {
                     category: expense.category,
                     user_name: expense.user_name
                 }));
-                console.log('Loading table data into Handsontable:', tableData);
+                debug.log('Loading table data into Handsontable:', tableData);
                 this.monthlyTable.loadData(tableData);
             }
 
             // Update category breakdown
             this.updateCategoryBreakdown(filteredExpenses);
         } catch (error) {
-            console.error('Error refreshing monthly data:', error);
+            debug.error('Error refreshing monthly data:', error);
         }
     }
 
@@ -1841,10 +1854,10 @@ class DashboardManager {
         const categoryTotals = {};
         let totalAmount = 0;
 
-        console.log('=== DEBUG: Processing table data for category breakdown ===');
-        console.log('Table data type:', typeof tableData);
-        console.log('Table data length:', tableData.length);
-        console.log('First row sample:', tableData[0]);
+        debug.log('=== DEBUG: Processing table data for category breakdown ===');
+        debug.log('Table data type:', typeof tableData);
+        debug.log('Table data length:', tableData.length);
+        debug.log('First row sample:', tableData[0]);
 
         tableData.forEach((row, index) => {
             if (row && Array.isArray(row) && row.length >= 4) {
@@ -1852,7 +1865,7 @@ class DashboardManager {
                 const category = row[1]; // Column 1 is category
                 const amount = parseFloat(row[2]) || 0; // Column 2 is amount
                 
-                console.log(`Row ${index}: category="${category}", amount=${amount}`);
+                debug.log(`Row ${index}: category="${category}", amount=${amount}`);
                 
                 if (category && amount > 0) {
                     if (!categoryTotals[category]) {
@@ -1864,8 +1877,8 @@ class DashboardManager {
             }
         });
 
-        console.log('Category totals:', categoryTotals);
-        console.log('Total amount:', totalAmount);
+        debug.log('Category totals:', categoryTotals);
+        debug.log('Total amount:', totalAmount);
         
         // Create HTML for category breakdown
         let html = '<div class="list-group list-group-flush">';
@@ -1910,7 +1923,7 @@ class DashboardManager {
             this.renderYearlyTable(yearlyData);
             
         } catch (error) {
-            console.error('Error initializing yearly table:', error);
+            debug.error('Error initializing yearly table:', error);
             // Fallback to sample data if API fails
             this.renderYearlyTable(this.getSampleYearlyData());
         }
@@ -2081,12 +2094,12 @@ class DashboardManager {
     async updateMonthlyChanges(rowId, rowData) {
         try {
             if (!rowId) {
-                console.error('No row ID provided for update');
+                debug.error('No row ID provided for update');
                 return;
             }
             
             if (!rowData || !rowData.date || !rowData.description || !rowData.amount) {
-                console.error('Invalid row data for update:', rowData);
+                debug.error('Invalid row data for update:', rowData);
                 return;
             }
             
@@ -2101,7 +2114,7 @@ class DashboardManager {
             if (rowId === 'new') {
                 // Create new expense in database
                 const result = await ApiClient.expenses.create(this.dashboardId, expenseData);
-                console.log('New expense created:', result);
+                debug.log('New expense created:', result);
                 
                 // Refresh the table to get the new expense with its real ID
                 const selectedMonth = this.getSelectedMonthFromDropdown();
@@ -2125,7 +2138,7 @@ class DashboardManager {
             }
             
         } catch (error) {
-            console.error('Error updating monthly changes:', error);
+            debug.error('Error updating monthly changes:', error);
             
             // Handle 403 Forbidden errors specifically
             if (error.status === 403) {
@@ -2137,7 +2150,7 @@ class DashboardManager {
     }
     
     async handleRowAddition(selection) {
-        console.log('handleRowAddition called with selection:', selection);
+        debug.log('handleRowAddition called with selection:', selection);
         
         try {
             const selectedMonth = this.getSelectedMonthFromDropdown();
@@ -2148,7 +2161,7 @@ class DashboardManager {
             
             // Get the row index where the new row should be added
             const rowIndex = selection[0].start.row;
-            console.log('Adding new row at index:', rowIndex);
+            debug.log('Adding new row at index:', rowIndex);
             
             // Create a temporary local row with placeholder values
             const newRow = {
@@ -2177,7 +2190,7 @@ class DashboardManager {
             Utils.showNotification('New row added. Fill out the details and click the save button when ready.', 'info');
             
         } catch (error) {
-            console.error('Error handling row addition:', error);
+            debug.error('Error handling row addition:', error);
             Utils.showNotification('Error adding new row', 'danger');
         }
     }
@@ -2210,7 +2223,7 @@ class DashboardManager {
         try {
             // Get the row data
             const rowData = this.monthlyTable.getDataAtRow(rowIndex);
-            console.log('Saving new row data:', rowData);
+            debug.log('Saving new row data:', rowData);
             
             // Extract expense data from row
             const expenseData = {
@@ -2228,7 +2241,7 @@ class DashboardManager {
             
             // Create new expense in database
             const result = await ApiClient.expenses.create(this.dashboardId, expenseData);
-            console.log('New expense created:', result);
+            debug.log('New expense created:', result);
             
             // Remove the save button
             this.removeSaveButtonFromRow(rowIndex);
@@ -2242,7 +2255,7 @@ class DashboardManager {
             Utils.showNotification('New expense saved successfully', 'success');
             
         } catch (error) {
-            console.error('Error saving new row:', error);
+            debug.error('Error saving new row:', error);
             Utils.showNotification('Error saving expense: ' + error.message, 'danger');
         }
     }
@@ -2260,7 +2273,7 @@ class DashboardManager {
     
     async saveMonthlyChanges() {
         // This function is now deprecated - individual operations are handled separately
-        console.log('saveMonthlyChanges is deprecated - use individual update/delete/add functions');
+        debug.log('saveMonthlyChanges is deprecated - use individual update/delete/add functions');
         Utils.showNotification('Individual row operations are now handled separately', 'info');
     }
 
@@ -2268,9 +2281,9 @@ class DashboardManager {
     async refreshYearlyData() {
         try {
             // In production, this would fetch aggregated yearly data
-            console.log('Refreshing yearly data');
+            debug.log('Refreshing yearly data');
         } catch (error) {
-            console.error('Error refreshing yearly data:', error);
+            debug.error('Error refreshing yearly data:', error);
         }
     }
 
@@ -2283,7 +2296,7 @@ class DashboardManager {
         saveButton.className = 'btn btn-primary mt-3';
         saveButton.innerHTML = '<i class="fas fa-save me-1"></i>Save Changes Manually';
         saveButton.addEventListener('click', () => {
-            console.log('Manual save button clicked');
+            debug.log('Manual save button clicked');
             this.saveMonthlyChanges();
         });
         
@@ -2374,7 +2387,7 @@ async function sendInvitation() {
             Utils.showNotification(result.error || 'Failed to send invitation', 'danger');
         }
     } catch (error) {
-        console.error('Error sending invitation:', error);
+        debug.error('Error sending invitation:', error);
         Utils.showNotification('Network error: ' + error.message, 'danger');
     }
 }
@@ -2410,7 +2423,7 @@ async function loadCurrentEditMode() {
             }
         }
     } catch (error) {
-        console.error('Error loading edit mode settings:', error);
+        debug.error('Error loading edit mode settings:', error);
         // Default to private mode on error
         document.getElementById('privateMode').checked = true;
     }
@@ -2446,7 +2459,7 @@ async function saveEditMode() {
             Utils.showNotification(result.error || 'Failed to save settings', 'danger');
         }
     } catch (error) {
-        console.error('Error saving edit mode:', error);
+        debug.error('Error saving edit mode:', error);
         Utils.showNotification('Network error: ' + error.message, 'danger');
     }
 }

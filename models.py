@@ -130,19 +130,30 @@ class ChatSession(db.Model):
             return json.loads(self.conversation_history)
         return []
     
-    def add_message(self, role, content):
+    def add_message(self, role, content, csv_data=None):
         """Add a message to conversation history"""
         history = self.get_conversation_history()
-        history.append({
+        
+        # Add new message
+        message = {
             'role': role,
             'content': content,
             'timestamp': datetime.utcnow().isoformat()
-        })
+        }
+        if csv_data:
+            message['csv_data'] = csv_data
+        
+        history.append(message)
         self.conversation_history = json.dumps(history)
     
     def get_csv_data(self):
         """Get current CSV data"""
         return self.current_csv_data or self.original_csv_data
+    
+    def update_csv_data(self, csv_data):
+        """Update current CSV data"""
+        self.current_csv_data = csv_data
+        self.updated_at = datetime.utcnow()
 
 class DashboardInvitation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
