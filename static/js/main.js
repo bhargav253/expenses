@@ -46,9 +46,19 @@ const Utils = {
 const ApiClient = {
     // Make API request
     request: async (url, options = {}) => {
+        const csrfToken = (() => {
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            if (meta) {
+                return meta.getAttribute('content');
+            }
+            const match = document.cookie.match(/csrf_token=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
+        })();
+
         const config = {
             headers: {
                 'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken,
                 ...options.headers
             },
             ...options

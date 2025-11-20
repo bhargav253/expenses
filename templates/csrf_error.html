@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+
+{% block title %}Security Error{% endblock %}
+
+{% block content %}
+<div class="alert alert-danger mt-4">
+    <h5 class="alert-heading"><i class="fas fa-shield-alt me-2"></i>Security validation failed</h5>
+    <p class="mb-0">{{ reason or "Your request was blocked because the CSRF token was missing or invalid. Please try again." }}</p>
+</div>
+{% endblock %}

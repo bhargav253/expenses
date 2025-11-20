@@ -3,6 +3,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import json
 
+from security_utils import decrypt_str, encrypt_str
+
 # Predefined expense categories
 EXPENSE_CATEGORIES = [
     'car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 
@@ -37,6 +39,17 @@ class User(db.Model):
     def check_password(self, password):
         """Check password hash"""
         return check_password_hash(self.password_hash, password)
+
+    def set_encrypted_api_key(self, field_name, value):
+        """Store API keys encrypted when possible."""
+        if hasattr(self, field_name):
+            setattr(self, field_name, encrypt_str(value))
+
+    def get_decrypted_api_key(self, field_name):
+        """Fetch decrypted API key value for the configured provider."""
+        if not hasattr(self, field_name):
+            return None
+        return decrypt_str(getattr(self, field_name))
     
     def get_profile_picture(self):
         """Get profile picture URL, generate default if not set"""
@@ -127,7 +140,9 @@ class ChatSession(db.Model):
     def get_conversation_history(self):
         """Get conversation history as Python list"""
         if self.conversation_history:
-            return json.loads(self.conversation_history)
+            raw_history = decrypt_str(self.conversation_history)
+            if raw_history:
+                return json.loads(raw_history)
         return []
     
     def add_message(self, role, content, csv_data=None):
@@ -144,15 +159,17 @@ class ChatSession(db.Model):
             message['csv_data'] = csv_data
         
         history.append(message)
-        self.conversation_history = json.dumps(history)
+        self.conversation_history = encrypt_str(json.dumps(history))
     
     def get_csv_data(self):
         """Get current CSV data"""
-        return self.current_csv_data or self.original_csv_data
+        current = decrypt_str(self.current_csv_data) if self.current_csv_data else None
+        original = decrypt_str(self.original_csv_data) if self.original_csv_data else None
+        return current or original
     
     def update_csv_data(self, csv_data):
         """Update current CSV data"""
-        self.current_csv_data = csv_data
+        self.current_csv_data = encrypt_str(csv_data)
         self.updated_at = datetime.utcnow()
 
 class DashboardInvitation(db.Model):
@@ -208,7 +225,9 @@ class PDFExtraction(db.Model):
     def get_conversation_history(self):
         """Get conversation history as Python list"""
         if self.conversation_history:
-            return json.loads(self.conversation_history)
+            raw_history = decrypt_str(self.conversation_history)
+            if raw_history:
+                return json.loads(raw_history)
         return []
     
     def add_message(self, role, content, csv_data=None):
@@ -230,9 +249,17 @@ class PDFExtraction(db.Model):
         if len(history) > 5:
             history = history[-5:]
         
-        self.conversation_history = json.dumps(history)
+        self.conversation_history = encrypt_str(json.dumps(history))
     
     def update_csv_data(self, csv_data):
         """Update current CSV data"""
-        self.current_csv_data = csv_data
+        self.current_csv_data = encrypt_str(csv_data)
         self.updated_at = datetime.utcnow()
+
+    def get_current_csv_data(self):
+        """Return decrypted current CSV data"""
+        return decrypt_str(self.current_csv_data)
+
+    def get_extracted_text(self):
+        """Return decrypted extracted text"""
+        return decrypt_str(self.extracted_text)

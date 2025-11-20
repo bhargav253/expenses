@@ -4,9 +4,7 @@ class Debug {
         this.enabled = window.location.hostname === 'localhost' || 
                       window.location.hostname === '127.0.0.1' ||
                       window.location.hostname.includes('local') ||
-                      window.location.hostname.includes('192.168') ||
-                      new URLSearchParams(window.location.search).has('debug') ||
-                      true; // Enable debug logging for all environments during development
+                      window.location.hostname.includes('192.168')
     }
 
     log(...args) {

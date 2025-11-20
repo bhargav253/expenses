@@ -1,10 +1,12 @@
 // Dashboard-specific JavaScript functionality
+const csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
 
 class DashboardManager {
     constructor(dashboardId) {
         this.dashboardId = dashboardId;
         this.currentSessionId = null;
         this.currentCsvData = null;
+        this.csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
         this.init();
     }
 
@@ -369,6 +371,7 @@ class DashboardManager {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-CSRFToken': this.csrfToken
                     },
                     body: JSON.stringify({
                         pdf_data: base64Pdf,
@@ -409,6 +412,7 @@ class DashboardManager {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'X-CSRFToken': this.csrfToken
                 },
                 body: JSON.stringify({
                     prompt: prompt,
@@ -475,6 +479,7 @@ class DashboardManager {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'X-CSRFToken': this.csrfToken
                 },
                 body: JSON.stringify({
                     excel_data: base64Excel,
@@ -2100,6 +2105,7 @@ async function saveEditMode() {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken
             },
             body: JSON.stringify({
                 edit_mode: editMode

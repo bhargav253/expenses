@@ -1,9 +1,11 @@
-from flask import Flask, render_template, redirect, url_for, session, request, jsonify, flash
+from flask import Flask, render_template, redirect, url_for, session, request, jsonify, flash, make_response
 from flask_talisman import Talisman
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from extensions import db
 from authlib.integrations.flask_client import OAuth
+from flask_wtf import CSRFProtect
+from flask_wtf.csrf import CSRFError, generate_csrf
 import os
 from datetime import datetime
 import json
@@ -15,7 +17,9 @@ import inspect
 import magic
 import re
 import json
+import html
 from logging.handlers import RotatingFileHandler
+from security_utils import decrypt_str, encrypt_str, encryption_enabled
 
 # Security Configuration
 # ======================
@@ -34,7 +38,7 @@ MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 # Initialize Flask app
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+app.secret_key = os.environ.get("SECRET_KEY", None)
 
 # Initialize Flask-Limiter
 limiter = Limiter(
@@ -42,6 +46,9 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[RATE_LIMITS['general_api']]
 )
+
+# Initialize CSRF protection
+csrf = CSRFProtect(app)
 
 # Determine if we're in development mode
 # Check multiple environment variables for development mode detection
@@ -59,11 +66,17 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax'              # CSRF protection
 )
 
+# Enforce SECRET_KEY presence in non-development environments
+if not app.secret_key and not is_development:
+    raise RuntimeError("SECRET_KEY must be set in production environments")
+elif not app.secret_key:
+    app.secret_key = "dev-secret-key-change-in-production"
+
 # Initialize Flask-Talisman for security headers
 talisman_config = {
     'content_security_policy': {
         'default-src': "'self'",
-        'script-src': ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net", "https://code.jquery.com", "https://cdn.datatables.net"],
+        'script-src': ["'self'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net", "https://code.jquery.com", "https://cdn.datatables.net"],
         'style-src': ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net"],
         'img-src': ["'self'", "data:", "https:"],
         'font-src': ["'self'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net"],
@@ -180,6 +193,35 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger(__name__)
 
+
+@app.after_request
+def set_csrf_cookie(response):
+    """Ensure a fresh CSRF token is available to the client."""
+    try:
+        csrf_token = generate_csrf()
+        response.set_cookie(
+            "csrf_token",
+            csrf_token,
+            secure=not is_development,
+            httponly=False,  # Must be readable by JS for fetch headers
+            samesite="Lax"
+        )
+    except Exception as exc:  # pragma: no cover - defensive log path
+        logger.error(f"Failed to set CSRF cookie: {exc}")
+    return response
+
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
+        return jsonify({'error': 'CSRF validation failed'}), 400
+    return make_response(render_template('csrf_error.html', reason=e.description), 400)
+
+
+@app.context_processor
+def inject_security_tokens():
+    return {'csrf_token': generate_csrf}
+
 # Security Helper Functions
 # =========================
 
@@ -278,10 +320,8 @@ def validate_expense_data(expense_data):
     
     # Sanitize description to prevent XSS
     description = expense_data['description']
-    if any(char in description for char in ['<', '>', '&', '"', "'"]):
-        # HTML encode special characters
-        description = description.replace('&', '&').replace('<', '<').replace('>', '>').replace('"', '"').replace("'", '&#x27;')
-        expense_data['description'] = description
+    sanitized_description = html.escape(description, quote=True)
+    expense_data['description'] = sanitized_description
     
     return expense_data
 
@@ -492,13 +532,13 @@ def update_ai_settings():
     
     # Update API keys
     if 'mistral_api_key' in data:
-        user.mistral_api_key = data['mistral_api_key']
+        user.set_encrypted_api_key('mistral_api_key', data['mistral_api_key'])
     if 'openai_api_key' in data:
-        user.openai_api_key = data['openai_api_key']
+        user.set_encrypted_api_key('openai_api_key', data['openai_api_key'])
     if 'anthropic_api_key' in data:
-        user.anthropic_api_key = data['anthropic_api_key']
+        user.set_encrypted_api_key('anthropic_api_key', data['anthropic_api_key'])
     if 'deepseek_api_key' in data:
-        user.deepseek_api_key = data['deepseek_api_key']
+        user.set_encrypted_api_key('deepseek_api_key', data['deepseek_api_key'])
     
     db.session.commit()
     
@@ -631,9 +671,9 @@ def create_ai_session(dashboard_id):
         dashboard_id=dashboard_id,
         user_id=session['user_id'],
         session_id=session_id,
-        original_csv_data=csv_data,
-        current_csv_data=csv_data,
-        conversation_history='[]'
+        original_csv_data=encrypt_str(csv_data),
+        current_csv_data=encrypt_str(csv_data),
+        conversation_history=encrypt_str('[]')
     )
     db.session.add(chat_session)
     db.session.commit()
@@ -714,9 +754,9 @@ def process_csv_with_ai(dashboard_id):
                 dashboard_id=dashboard_id,
                 user_id=session['user_id'],
                 session_id=session_id,
-                original_csv_data=csv_data,
-                current_csv_data=csv_data,
-                conversation_history='[]'
+                original_csv_data=encrypt_str(csv_data),
+                current_csv_data=encrypt_str(csv_data),
+                conversation_history=encrypt_str('[]')
             )
             db.session.add(chat_session)
         
@@ -837,9 +877,9 @@ def extract_from_pdf(dashboard_id):
             user_id=session['user_id'],
             extraction_id=extraction_id,
             filename=filename,
-            extracted_text=extracted_text,
-            current_csv_data='',  # Start with empty CSV
-            conversation_history='[]',  # Start with empty conversation
+            extracted_text=encrypt_str(extracted_text),
+            current_csv_data=encrypt_str(''),  # Start with empty CSV
+            conversation_history=encrypt_str('[]'),  # Start with empty conversation
             status='extracted'  # Changed from 'completed' to 'extracted'
         )
         db.session.add(pdf_extraction)
@@ -968,16 +1008,16 @@ def process_pdf_chat(dashboard_id):
         conversation_history = pdf_extraction.get_conversation_history()
         
         # Add user message to conversation
-        pdf_extraction.add_message('user', prompt, pdf_extraction.current_csv_data)
+        pdf_extraction.add_message('user', prompt, pdf_extraction.get_current_csv_data())
         
         # Process with AI using the extracted text and current CSV data
         processed_csv, ai_response = call_aimodel_with_context_and_csv(
             user, 
-            pdf_extraction.extracted_text, 
+            pdf_extraction.get_extracted_text(), 
             pdf_extraction.filename, 
             prompt, 
             conversation_history,
-            pdf_extraction.current_csv_data
+            pdf_extraction.get_current_csv_data()
         )
         
         # Update extraction with new CSV data and AI response
@@ -1198,7 +1238,7 @@ def call_aimodel_excel_api(user, excel_data, filename, prompt=""):
         raise ValueError(f"Unsupported AI model: {model_key}")
     
     # Get API key for the selected model
-    api_key = getattr(user, model_config['api_key_field'])
+    api_key = user.get_decrypted_api_key(model_config['api_key_field'])
     if not api_key:
         raise ValueError(f"{model_config['name']} API key not configured")
     
@@ -1318,7 +1358,7 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         raise ValueError(f"Unsupported AI model: {model_key}")
     
     # Get API key for the selected model
-    api_key = getattr(user, model_config['api_key_field'])
+    api_key = user.get_decrypted_api_key(model_config['api_key_field'])
     if not api_key:
         raise ValueError(f"{model_config['name']} API key not configured")
     
