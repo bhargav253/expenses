@@ -627,12 +627,21 @@ def delete_dashboard(dashboard_id):
         # Delete all related data first (to maintain referential integrity)
         # Delete expenses
         Expense.query.filter_by(dashboard_id=dashboard_id).delete()
+
+        # Delete per-dashboard user settings
+        UserDashboardSettings.query.filter_by(dashboard_id=dashboard_id).delete()
         
         # Delete uploaded files
         UploadedFile.query.filter_by(dashboard_id=dashboard_id).delete()
         
         # Delete chat sessions
         ChatSession.query.filter_by(dashboard_id=dashboard_id).delete()
+
+        # Delete PDF extractions
+        PDFExtraction.query.filter_by(dashboard_id=dashboard_id).delete()
+
+        # Delete dashboard invitations
+        DashboardInvitation.query.filter_by(dashboard_id=dashboard_id).delete()
         
         # Delete dashboard members
         DashboardMember.query.filter_by(dashboard_id=dashboard_id).delete()
@@ -1667,6 +1676,55 @@ def get_dashboard_members(dashboard_id):
         })
     
     return jsonify(member_data)
+
+@app.route('/api/dashboard/<int:dashboard_id>/members/<int:user_id>', methods=['DELETE'])
+def remove_dashboard_member(dashboard_id, user_id):
+    """Remove a member from a dashboard. Only owners can remove, and the last owner cannot be removed."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    acting_user_id = session['user_id']
+
+    # Ensure the requester is an owner
+    owner_member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id,
+        user_id=acting_user_id,
+        role='owner'
+    ).first()
+    if not owner_member:
+        return jsonify({'error': 'Only dashboard owners can remove members'}), 403
+
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id,
+        user_id=user_id
+    ).first()
+    if not member:
+        return jsonify({'error': 'Member not found on this dashboard'}), 404
+
+    # Prevent removing the last owner
+    if member.role == 'owner':
+        owner_count = DashboardMember.query.filter_by(
+            dashboard_id=dashboard_id,
+            role='owner'
+        ).count()
+        if owner_count <= 1:
+            return jsonify({'error': 'Cannot remove the last owner of the dashboard'}), 400
+
+    try:
+        # Clean up per-user settings for this dashboard
+        UserDashboardSettings.query.filter_by(
+            dashboard_id=dashboard_id,
+            user_id=user_id
+        ).delete()
+
+        db.session.delete(member)
+        db.session.commit()
+
+        return jsonify({'message': 'Member removed successfully'})
+    except Exception as exc:
+        db.session.rollback()
+        logger.error(f"Failed to remove member: {exc}")
+        return jsonify({'error': 'Failed to remove member'}), 500
 
 # Dashboard Invitation Endpoints
 @app.route('/api/dashboard/<int:dashboard_id>/invite', methods=['POST'])
