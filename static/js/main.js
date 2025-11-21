@@ -168,6 +168,11 @@ const ApiClient = {
         
         getSession: (dashboardId, sessionId) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/session/${sessionId}`),
         
+        cleanup: (dashboardId, data) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/cleanup`, {
+            method: 'POST',
+            body: data
+        }),
+        
         extractFromPdf: (dashboardId, base64Pdf, filename) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/extract-pdf`, {
             method: 'POST',
             body: { pdf_data: base64Pdf, filename }

@@ -20,6 +20,7 @@ import json
 import html
 from logging.handlers import RotatingFileHandler
 from security_utils import decrypt_str, encrypt_str, encryption_enabled
+from dotenv import load_dotenv
 
 # Security Configuration
 # ======================
@@ -35,6 +36,9 @@ RATE_LIMITS = {
 # File Upload Security
 MAX_FILE_SIZE_MB = int(os.environ.get('MAX_FILE_SIZE_MB', '10'))
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+
+# Load environment variables from .env for local development
+load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -360,7 +364,8 @@ google = oauth.register(
     name='google',
     client_id=os.environ.get('GOOGLE_CLIENT_ID'),
     client_secret=os.environ.get('GOOGLE_CLIENT_SECRET'),
-    server_metadata_url='https://accounts.google.com/.well-known/openid_configuration',
+    # Correct well-known OpenID configuration URL (hyphenated)
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     client_kwargs={
         'scope': 'openid email profile'
     }
@@ -404,7 +409,7 @@ def login():
                 'id': user.id,
                 'email': user.email,
                 'name': user.name,
-                'picture': user.profile_picture
+                'picture': user.get_profile_picture()
             }
             flash('Login successful!', 'success')
             return redirect(url_for('dashboard_list'))
@@ -459,17 +464,21 @@ def google_login():
 @app.route('/auth/callback')
 def auth_callback():
     token = google.authorize_access_token()
-    user_info = token.get('userinfo')
+    
+    # Fetch profile information using the UserInfo endpoint; fall back to ID token payload.
+    user_info = None
+    resp = google.get('https://openidconnect.googleapis.com/v1/userinfo')
+    if resp and resp.ok:
+        user_info = resp.json()
+    else:
+        try:
+            user_info = google.parse_id_token(token, nonce=token.get('nonce'))
+        except TypeError:
+            # Authlib may require a nonce; ignore and proceed without ID token parsing.
+            user_info = None
     
     if user_info:
         # Store user in session
-        session['user'] = {
-            'id': user_info['sub'],
-            'email': user_info['email'],
-            'name': user_info['name'],
-            'picture': user_info['picture']
-        }
-        
         # Create or update user in database
         user = User.query.filter_by(google_id=user_info['sub']).first()
         if not user:
@@ -481,6 +490,14 @@ def auth_callback():
             )
             db.session.add(user)
             db.session.commit()
+        
+        # Update session with model-backed picture (uses default avatar if missing)
+        session['user'] = {
+            'id': user.id,
+            'email': user.email,
+            'name': user.name,
+            'picture': user.get_profile_picture()
+        }
         
         session['user_id'] = user.id
         
@@ -710,6 +727,59 @@ def get_ai_session(dashboard_id, session_id):
         'session_id': chat_session.session_id,
         'csv_data': chat_session.get_csv_data(),
         'conversation_history': chat_session.get_conversation_history()
+    })
+
+@app.route('/api/dashboard/<int:dashboard_id>/ai/cleanup', methods=['POST'])
+def cleanup_ai_data(dashboard_id):
+    """Delete temporary AI artifacts (chat sessions, PDF extractions) to save space."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check dashboard access
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id,
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    data = request.get_json() or {}
+    session_id = data.get('session_id')
+    extraction_id = data.get('extraction_id')
+    
+    deleted_sessions = 0
+    deleted_extractions = 0
+    
+    try:
+        if session_id:
+            deleted_sessions = ChatSession.query.filter_by(
+                session_id=session_id,
+                dashboard_id=dashboard_id,
+                user_id=session['user_id']
+            ).delete()
+        
+        if extraction_id:
+            deleted_extractions = PDFExtraction.query.filter_by(
+                extraction_id=extraction_id,
+                dashboard_id=dashboard_id,
+                user_id=session['user_id']
+            ).delete()
+        
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        logger.error(f"Failed to cleanup AI data: {exc}", extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'session_id': session_id,
+            'extraction_id': extraction_id
+        })
+        return jsonify({'error': 'Failed to cleanup AI data'}), 500
+    
+    return jsonify({
+        'message': 'Cleanup completed',
+        'deleted_sessions': deleted_sessions,
+        'deleted_extractions': deleted_extractions
     })
 
 @app.route('/api/dashboard/<int:dashboard_id>/ai/process', methods=['POST'])

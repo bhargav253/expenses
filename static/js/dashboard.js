@@ -107,6 +107,10 @@ class DashboardManager {
     }
     
     cancelOption(option) {
+        // Capture current IDs for cleanup before clearing local state
+        const sessionId = this.currentSessionId;
+        const extractionId = this.getStoredExtractionId();
+
         // Hide the current option interface
         if (option === 'sheets') {
             const sheetsPasteArea = document.getElementById('sheetsPasteArea');
@@ -153,10 +157,11 @@ class DashboardManager {
         // Clear chat messages
         this.clearAiChat();
         
-        // Clear localStorage for this dashboard
+        // Clear localStorage for this dashboard and delete temp server data
         const localStorageKey = `pdf_extraction_${this.dashboardId}`;
         localStorage.removeItem(localStorageKey);
         debug.log('Cleared localStorage on cancel:', localStorageKey);
+        this.cleanupAiState({ sessionId, extractionId });
         
         Utils.showNotification('Upload cancelled', 'info');
     }
@@ -246,6 +251,42 @@ class DashboardManager {
             reader.onerror = (e) => reject(e);
             reader.readAsText(file);
         });
+    }
+
+    getStoredExtractionId() {
+        const localStorageKey = `pdf_extraction_${this.dashboardId}`;
+        const storedState = localStorage.getItem(localStorageKey);
+        if (!storedState) return null;
+        try {
+            const state = JSON.parse(storedState);
+            return state.extraction_id || null;
+        } catch (error) {
+            debug.warn('Failed to parse stored extraction state', error);
+            return null;
+        }
+    }
+
+    async cleanupAiState(options = {}) {
+        const sessionId = options.sessionId !== undefined ? options.sessionId : this.currentSessionId;
+        const extractionId = options.extractionId !== undefined ? options.extractionId : this.getStoredExtractionId();
+        
+        if (!sessionId && !extractionId) {
+            return;
+        }
+        
+        try {
+            await ApiClient.ai.cleanup(this.dashboardId, {
+                session_id: sessionId,
+                extraction_id: extractionId
+            });
+        } catch (error) {
+            debug.warn('AI cleanup failed', error);
+        } finally {
+            // Always clear local state to avoid reusing stale IDs
+            this.currentSessionId = null;
+            const localStorageKey = `pdf_extraction_${this.dashboardId}`;
+            localStorage.removeItem(localStorageKey);
+        }
     }
 
     setupAiChat() {
@@ -897,6 +938,9 @@ class DashboardManager {
                 editableSection.classList.add('d-none');
             }
             
+            // Cleanup temporary AI data once saved
+            this.cleanupAiState();
+            
         } catch (error) {
             debug.error('Error saving expenses:', error);
             Utils.showNotification('Error saving expenses to database', 'danger');
@@ -993,6 +1037,9 @@ class DashboardManager {
             
             // Refresh all components after data ingress
             await this.refreshAllComponents();
+            
+            // Cleanup temporary AI data once saved
+            this.cleanupAiState();
             
         } catch (error) {
             debug.error('Error saving CSV data:', error);
