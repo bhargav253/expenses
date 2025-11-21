@@ -352,7 +352,13 @@ AI_MODELS = {
 }
 
 # Database configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///expenses.db'
+# Prefer DATABASE_URL / SQLALCHEMY_DATABASE_URI env vars; default to local SQLite
+database_url = os.environ.get('DATABASE_URL') or os.environ.get('SQLALCHEMY_DATABASE_URI')
+# Render/Neon sometimes use postgres://; SQLAlchemy expects postgresql://
+if database_url and database_url.startswith('postgres://'):
+    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url or 'sqlite:///expenses.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize extensions

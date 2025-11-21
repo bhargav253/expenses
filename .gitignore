@@ -2,4 +2,6 @@
 sample/
 logs/
 .env
+env.example
+.env.example
 *.db
