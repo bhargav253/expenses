@@ -303,6 +303,33 @@ body {
     border: 1px solid var(--splitwise-border);
 }
 
+.handsontable .wtHolder {
+    -webkit-overflow-scrolling: touch;
+}
+
+@media (hover: none) and (pointer: coarse) {
+    #monthlyExpensesTable,
+    #editableCsvTable {
+        touch-action: pan-x pan-y;
+    }
+
+    .handsontable.htTouchFriendly .wtHolder {
+        overflow: auto !important;
+    }
+
+    .handsontable.htTouchFriendly td,
+    .handsontable.htTouchFriendly th {
+        padding: 12px 10px;
+        min-height: 44px;
+        font-size: 0.95rem;
+    }
+
+    .handsontable.htTouchFriendly .handsontableInput {
+        min-height: 44px;
+        font-size: 16px;
+    }
+}
+
 /* Mobile-first responsive design */
 @media (max-width: 768px) {
     .hero-section {

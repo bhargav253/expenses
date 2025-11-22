@@ -7,6 +7,7 @@ class DashboardManager {
         this.currentSessionId = null;
         this.currentCsvData = null;
         this.csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+        this.isTouchDevice = this.detectTouchDevice();
         this.init();
     }
 
@@ -15,6 +16,16 @@ class DashboardManager {
         this.setupAiChat();
         this.setupTableEditors();
         this.setupEventListeners();
+    }
+
+    detectTouchDevice() {
+        const hasWindow = typeof window !== 'undefined';
+        const hasNavigator = typeof navigator !== 'undefined';
+        return (
+            (hasWindow && 'ontouchstart' in window) ||
+            (hasNavigator && navigator.maxTouchPoints > 0) ||
+            (hasWindow && window.matchMedia && window.matchMedia('(pointer: coarse)').matches)
+        );
     }
 
     setupPdfProcessing() {
@@ -740,7 +751,7 @@ class DashboardManager {
                 for (let i = cells.length - 1; i > 0; i--) {
                     const cell = cells[i];
                     if (cell && cell !== description && cell !== amount) {
-                        category = cell;
+                        category = this.normalizeCategory(cell);
                         break;
                     }
                 }
@@ -767,6 +778,83 @@ class DashboardManager {
         return csvRows.join('\n');
     }
 
+    normalizeCategory(label) {
+        if (!label) return '';
+        const cleaned = label.toString().trim().toLowerCase();
+        const stripped = cleaned
+            .replace(/[^\w\s]/g, ' ') // remove punctuation like commas/periods
+            .replace(/\s+/g, ' ')
+            .trim();
+        const singularish = stripped.endsWith('s') && stripped.length > 4 ? stripped.slice(0, -1) : stripped;
+        
+        const aliases = {
+            'restaurant': 'restaurant',
+            'restaurants': 'restaurant',
+            'dining': 'restaurant',
+            'food out': 'restaurant',
+            'utility': 'utility',
+            'utilities': 'utility',
+            'internet': 'utility',
+            'wifi': 'utility',
+            'water': 'utility',
+            'electric': 'utility',
+            'electricity': 'utility',
+            'power': 'utility',
+            'gas bill': 'utility',
+            'grocery': 'grocery',
+            'groceries': 'grocery',
+            'market': 'grocery',
+            'fuel': 'gas',
+            'petrol': 'gas',
+            'transport': 'transport',
+            'transportation': 'transport',
+            'transit': 'transport',
+            'uber': 'transport',
+            'lyft': 'transport',
+            'taxi': 'transport',
+            'bus': 'transport',
+            'train': 'transport',
+            'home exp': 'home exp',
+            'home expense': 'home exp',
+            'home expenses': 'home exp',
+            'home setup': 'home setup',
+            'furniture': 'home setup',
+            'service': 'service',
+            'services': 'service',
+            'shopping': 'shopping',
+            'retail': 'shopping',
+            'vacation': 'vacation',
+            'travel': 'vacation',
+            'trip': 'vacation',
+            'car': 'car',
+            'auto': 'car',
+            'vehicle': 'car',
+            'gym': 'gym',
+            'fitness': 'gym',
+            'hospital': 'hospital',
+            'medical': 'hospital',
+            'health': 'hospital',
+            'mortgage': 'mortgage',
+            'rent': 'rent',
+            'misc': 'misc',
+            'miscellaneous': 'misc',
+            'other': 'misc'
+        };
+        
+        return aliases[stripped] || aliases[singularish] || stripped || cleaned;
+    }
+
+    parseCsvRows(csvData) {
+        return csvData
+            .split('\n')
+            .filter(line => line.trim() !== '')
+            .map(line => line
+                // Split on commas that are not inside quotes
+                .split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)
+                .map(cell => cell.replace(/^"|"$/g, '').replace(/""/g, '"'))
+            );
+    }
+
     showCsvPreview(csvData) {
         const processingArea = document.getElementById('processingArea');
         const csvPreviewArea = document.getElementById('csvPreviewArea');
@@ -776,13 +864,12 @@ class DashboardManager {
         csvPreviewArea.classList.remove('d-none');
         
         // Parse CSV and create table preview
-        const rows = csvData.split('\n');
+        const rows = this.parseCsvRows(csvData);
         let tableHtml = '';
         
         rows.forEach((row, index) => {
-            const cells = row.split(',').map(cell => cell.replace(/^"|"$/g, ''));
             tableHtml += '<tr>';
-            cells.forEach(cell => {
+            row.forEach(cell => {
                 if (index === 0) {
                     tableHtml += `<th>${cell}</th>`;
                 } else {
@@ -824,11 +911,14 @@ class DashboardManager {
         const editableTableContainer = document.getElementById('editableCsvTable');
         if (!editableTableContainer) return;
         
-        // Parse CSV data
-        const rows = csvData.split('\n');
-        const headers = rows[0].split(',').map(h => h.replace(/^"|"$/g, ''));
+        // Parse CSV data (handles embedded commas)
+        const rows = this.parseCsvRows(csvData);
+        const headers = rows[0] || [];
         const dataRows = rows.slice(1).map(row => {
-            const cells = row.split(',').map(cell => cell.replace(/^"|"$/g, ''));
+            const cells = row.slice();
+            while (cells.length < headers.length) {
+                cells.push('');
+            }
             return cells;
         });
         
@@ -837,6 +927,7 @@ class DashboardManager {
             this.editableCsvTable.destroy();
         }
         
+        const isTouch = this.isTouchDevice;
         this.editableCsvTable = new Handsontable(editableTableContainer, {
             data: dataRows,
             columns: headers.map((header, index) => ({
@@ -845,11 +936,16 @@ class DashboardManager {
             })),
             colHeaders: headers,
             rowHeaders: true,
-            contextMenu: true,
-            manualColumnResize: true,
-            manualRowMove: true,
+            contextMenu: isTouch ? ['row_above', 'row_below', 'remove_row'] : true,
+            manualColumnResize: !isTouch,
+            manualRowMove: !isTouch,
             licenseKey: 'non-commercial-and-evaluation',
-            height: 300,
+            height: isTouch ? 'auto' : 300,
+            stretchH: 'all',
+            preventOverflow: 'horizontal',
+            selectionMode: isTouch ? 'single' : 'range',
+            className: isTouch ? 'htTouchFriendly' : '',
+            rowHeights: isTouch ? 44 : undefined,
             afterChange: (changes, source) => {
                 if (source === 'edit') {
                     this.updateCsvFromEditableTable();
@@ -1166,6 +1262,7 @@ class DashboardManager {
             return;
         }
 
+        const isTouch = this.isTouchDevice;
         // Initialize empty table - data will be loaded from API
         this.monthlyTable = new Handsontable(container, {
             data: [],
@@ -1246,10 +1343,15 @@ class DashboardManager {
                     'alignment': {}
                 }
             },
-            manualColumnResize: true,
-            manualRowMove: true,
+            manualColumnResize: !isTouch,
+            manualRowMove: !isTouch,
             licenseKey: 'non-commercial-and-evaluation',
-            height: 400, // Fixed height to prevent ResizeObserver issues
+            height: isTouch ? 'auto' : 400, // Allow natural height on touch to reduce nested scrolling
+            stretchH: 'all',
+            preventOverflow: 'horizontal',
+            selectionMode: isTouch ? 'single' : 'range',
+            className: isTouch ? 'htTouchFriendly' : '',
+            rowHeights: isTouch ? 44 : undefined,
             afterChange: (changes, source) => {
                 debug.log('Handsontable afterChange called:', { 
                     changes: changes, 
