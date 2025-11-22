@@ -165,6 +165,27 @@ class DashboardManager {
         
         Utils.showNotification('Upload cancelled', 'info');
     }
+
+    resetSheetsUI() {
+        const optionCards = document.querySelectorAll('.option-card');
+        optionCards.forEach(card => card.classList.remove('d-none'));
+
+        const sheetsPasteArea = document.getElementById('sheetsPasteArea');
+        const sheetsPasteText = document.getElementById('sheetsPasteText');
+        const csvPreviewArea = document.getElementById('csvPreviewArea');
+        const previewTable = document.getElementById('csvPreviewTable');
+        const editableSection = document.getElementById('editableCsvSection');
+        const saveCsvBtn = document.getElementById('saveCsv');
+
+        if (sheetsPasteArea) sheetsPasteArea.classList.add('d-none');
+        if (sheetsPasteText) sheetsPasteText.value = '';
+        if (csvPreviewArea) csvPreviewArea.classList.add('d-none');
+        if (previewTable) previewTable.innerHTML = '';
+        if (editableSection) editableSection.classList.add('d-none');
+        if (saveCsvBtn) saveCsvBtn.disabled = true;
+
+        this.editableCsvTable = null;
+    }
     
     async handleAIUpload(event) {
         const file = event.target.files[0];
@@ -629,6 +650,9 @@ class DashboardManager {
     getSelectedMonthFromDropdown() {
         const dropdownButton = document.getElementById('monthDropdown');
         if (!dropdownButton) return null;
+
+        const dataAttr = dropdownButton.getAttribute('data-month');
+        if (dataAttr) return dataAttr;
         
         // Extract month from dropdown button text
         const buttonText = dropdownButton.textContent.trim();
@@ -781,9 +805,17 @@ class DashboardManager {
         // Setup save data button
         const saveBtn = document.getElementById('saveCsv');
         if (saveBtn) {
-            saveBtn.addEventListener('click', () => {
-                this.saveCsvDataDirectly(csvData);
-            });
+            saveBtn.addEventListener('click', async () => {
+                const originalText = saveBtn.textContent;
+                saveBtn.disabled = true;
+                saveBtn.textContent = 'Saving...';
+                try {
+                    await this.saveCsvDataDirectly(csvData);
+                } finally {
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = originalText;
+                }
+            }, { once: true });
         }
     }
 
@@ -845,8 +877,19 @@ class DashboardManager {
     }
     
     async saveExpensesToDb() {
+        const saveBtn = document.getElementById('saveExpenses');
+        const originalSaveText = saveBtn ? saveBtn.textContent : null;
+        if (saveBtn) {
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Saving...';
+        }
+
         if (!this.editableCsvTable) {
             Utils.showNotification('No data to save', 'warning');
+            if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.textContent = originalSaveText;
+            }
             return;
         }
         
@@ -937,6 +980,9 @@ class DashboardManager {
             if (editableSection) {
                 editableSection.classList.add('d-none');
             }
+
+            // Full reset of Sheets upload UI
+            this.resetSheetsUI();
             
             // Cleanup temporary AI data once saved
             this.cleanupAiState();
@@ -944,6 +990,11 @@ class DashboardManager {
         } catch (error) {
             debug.error('Error saving expenses:', error);
             Utils.showNotification('Error saving expenses to database', 'danger');
+        } finally {
+            if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.textContent = originalSaveText;
+            }
         }
     }
     
@@ -1038,6 +1089,9 @@ class DashboardManager {
             // Refresh all components after data ingress
             await this.refreshAllComponents();
             
+            // Full reset of Sheets upload UI
+            this.resetSheetsUI();
+            
             // Cleanup temporary AI data once saved
             this.cleanupAiState();
             
@@ -1052,10 +1106,10 @@ class DashboardManager {
         
         try {
             // 1. Refresh month dropdown
-            await this.setupMonthDropdown();
+            const refreshedMonth = await this.setupMonthDropdown();
             
             // 2. Refresh monthly table with current selected month
-            const selectedMonth = this.getSelectedMonthFromDropdown();
+            const selectedMonth = refreshedMonth || this.getSelectedMonthFromDropdown();
             if (selectedMonth) {
                 await this.refreshMonthlyData(selectedMonth);
             } else {
@@ -1282,6 +1336,7 @@ class DashboardManager {
                 debug.log('No months found in database, keeping dropdown blank');
                 menuHtml = '<li><a class="dropdown-item disabled" href="#">No data available</a></li>';
                 dropdownButton.innerHTML = '<i class="fas fa-calendar me-1"></i>Select Month';
+                dropdownButton.removeAttribute('data-month');
             } else {
                 // Populate dropdown with months from database
                 months.forEach(month => {
@@ -1295,6 +1350,7 @@ class DashboardManager {
                 const defaultMonthLabel = months[0].label;
                 debug.log('Setting default month to:', selectedMonth, 'label:', defaultMonthLabel);
                 dropdownButton.innerHTML = `<i class="fas fa-calendar me-1"></i>${defaultMonthLabel}`;
+                dropdownButton.setAttribute('data-month', selectedMonth);
             }
             
             dropdownMenu.innerHTML = menuHtml;
@@ -1308,6 +1364,7 @@ class DashboardManager {
                     debug.log('Month selected from dropdown:', selectedMonth);
                     this.handleMonthChange(selectedMonth);
                     dropdownButton.innerHTML = `<i class="fas fa-calendar me-1"></i>${e.target.textContent}`;
+                    dropdownButton.setAttribute('data-month', selectedMonth);
                 });
             });
             
@@ -1496,42 +1553,54 @@ class DashboardManager {
                 Utils.showNotification('No month selected', 'warning');
                 return;
             }
-            
-            // Get the row index that was removed
-            const removedRowIndex = selection[0].start.row;
-            debug.log('Removing row at index:', removedRowIndex);
-            
-            // Get the expense ID directly from the Handsontable data
-            if (this.monthlyTable) {
-                const rowData = this.monthlyTable.getDataAtRow(removedRowIndex);
-                debug.log('Row data at index', removedRowIndex, ':', rowData);
-                
-                // The expense ID should be in the last column (use -1 indexing like Python)
-                const expenseId = rowData[rowData.length - 1];
-                debug.log('Expense ID from table (last column):', expenseId);
-                
-                if (expenseId) {
-                    debug.log('Deleting expense with ID:', expenseId);
-                    await ApiClient.expenses.delete(this.dashboardId, expenseId);
-                    Utils.showNotification('Expense deleted successfully', 'success');
-                    
-                    // Remove the row from the table directly without full refresh
-                    this.monthlyTable.alter('remove_row', removedRowIndex);
-                    
-                    // Update category breakdown from current table data
-                    const currentTableData = this.monthlyTable.getData();
-                    debug.log('=== DEBUG: Current table data after row removal ===');
-                    debug.log('Number of rows:', currentTableData.length);
-                    debug.log('Expense IDs in table:', currentTableData.map(row => row[row.length - 1]));
-                    debug.log('Table data structure:', currentTableData);
-                    this.updateCategoryBreakdownFromTableData(currentTableData);
 
-                    // Refresh yearly table to reflect the changes
-                    await this.initYearlyTable();
-                } else {
-                    debug.error('No expense ID found in row data');
-                    Utils.showNotification('Error: Could not find expense ID', 'danger');
+            if (!this.monthlyTable) {
+                Utils.showNotification('Table not ready', 'warning');
+                return;
+            }
+
+            // Collect all selected rows (support multi-select ranges)
+            const rowsToDelete = new Set();
+            const ranges = Array.isArray(selection) ? selection : [selection];
+            ranges.forEach(range => {
+                const startRow = range.start ? range.start.row : range.row;
+                const endRow = range.end ? range.end.row : range.row;
+                const from = Math.min(startRow, endRow);
+                const to = Math.max(startRow, endRow);
+                for (let r = from; r <= to; r++) {
+                    rowsToDelete.add(r);
                 }
+            });
+
+            if (rowsToDelete.size === 0) {
+                Utils.showNotification('No rows selected', 'info');
+                return;
+            }
+
+            // Delete expenses and remove rows (process bottom-up to avoid index shift)
+            const sortedRows = Array.from(rowsToDelete).sort((a, b) => b - a);
+            let deletedCount = 0;
+            for (const rowIndex of sortedRows) {
+                const rowData = this.monthlyTable.getDataAtRow(rowIndex);
+                if (!rowData) continue;
+                const expenseId = rowData[rowData.length - 1];
+                debug.log('Attempting delete for row', rowIndex, 'expenseId', expenseId, 'rowData', rowData);
+                if (!expenseId) {
+                    debug.warn('Skipping row with no expense ID at index', rowIndex);
+                    continue;
+                }
+                await ApiClient.expenses.delete(this.dashboardId, expenseId);
+                this.monthlyTable.alter('remove_row', rowIndex);
+                deletedCount += 1;
+            }
+
+            if (deletedCount > 0) {
+                Utils.showNotification(`Deleted ${deletedCount} expense${deletedCount > 1 ? 's' : ''}`, 'success');
+                const currentTableData = this.monthlyTable.getData();
+                this.updateCategoryBreakdownFromTableData(currentTableData);
+                await this.initYearlyTable(); // keep yearly view in sync
+            } else {
+                Utils.showNotification('No expenses deleted', 'info');
             }
         } catch (error) {
             debug.error('Error handling row removal:', error);

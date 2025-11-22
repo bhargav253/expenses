@@ -61,6 +61,7 @@ const ApiClient = {
                 'X-CSRFToken': csrfToken,
                 ...options.headers
             },
+            cache: 'no-store',
             ...options
         };
         
@@ -142,7 +143,10 @@ const ApiClient = {
             body: data
         }),
         
-        get: (dashboardId) => ApiClient.request(`/api/dashboard/${dashboardId}/expenses`),
+        get: (dashboardId) => {
+            const ts = Date.now();
+            return ApiClient.request(`/api/dashboard/${dashboardId}/expenses?_=${ts}`);
+        },
         
         update: (dashboardId, expenseId, data) => ApiClient.request(`/api/dashboard/${dashboardId}/expenses/${expenseId}`, {
             method: 'PUT',
