@@ -246,6 +246,64 @@
         </div>
     </div>
 </div>
+
+<!-- Confirm Delete Dashboard Modal -->
+<div class="modal fade" id="deleteDashboardModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Delete Dashboard</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Delete <strong id="deleteDashboardName"></strong>? This removes all expenses, files, and related data.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteDashboardBtn">
+                    <i class="fas fa-trash-alt me-2"></i>Delete
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Confirm Remove Member Modal -->
+<div class="modal fade" id="removeMemberConfirmModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Remove Member</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Are you sure you want to remove <strong id="removeMemberName"></strong> from this dashboard?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmRemoveMemberBtn">
+                    <i class="fas fa-user-minus me-2"></i>Remove
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Feedback Modal -->
+<div class="modal fade" id="feedbackModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="feedbackModalTitle"></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="feedbackModalBody"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">OK</button>
+            </div>
+        </div>
+    </div>
+}
 {% endblock %}
 
 {% block extra_js %}
@@ -253,6 +311,20 @@
 document.addEventListener('DOMContentLoaded', function() {
     const createDashboardForm = document.getElementById('createDashboardForm');
     const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+    const feedbackModalEl = document.getElementById('feedbackModal');
+    const feedbackModal = new bootstrap.Modal(feedbackModalEl);
+    const feedbackModalTitle = document.getElementById('feedbackModalTitle');
+    const feedbackModalBody = document.getElementById('feedbackModalBody');
+    const deleteDashboardModalEl = document.getElementById('deleteDashboardModal');
+    const deleteDashboardModal = new bootstrap.Modal(deleteDashboardModalEl);
+    const deleteDashboardNameEl = document.getElementById('deleteDashboardName');
+    const confirmDeleteDashboardBtn = document.getElementById('confirmDeleteDashboardBtn');
+    let pendingDeleteDashboard = null;
+    const removeMemberModalEl = document.getElementById('removeMemberConfirmModal');
+    const removeMemberModal = new bootstrap.Modal(removeMemberModalEl);
+    const removeMemberName = document.getElementById('removeMemberName');
+    const confirmRemoveMemberBtn = document.getElementById('confirmRemoveMemberBtn');
+    let pendingRemoval = null;
     
     createDashboardForm.addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -281,10 +353,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 modal.hide();
                 window.location.href = `/dashboard/${result.dashboard_id}`;
             } else {
-                alert(result.error || 'Failed to create dashboard');
+                showFeedback('Create Dashboard', result.error || 'Failed to create dashboard', false);
             }
         } catch (error) {
-            alert('Network error: ' + error.message);
+            showFeedback('Create Dashboard', 'Network error: ' + error.message, false);
         }
     });
 
@@ -294,32 +366,9 @@ document.addEventListener('DOMContentLoaded', function() {
         button.addEventListener('click', async function() {
             const dashboardId = this.getAttribute('data-dashboard-id');
             const dashboardName = this.getAttribute('data-dashboard-name');
-            
-            // Confirm deletion
-            const confirmed = confirm(`Are you sure you want to delete the dashboard "${dashboardName}"? This action cannot be undone and will delete all associated expenses and data.`);
-            
-            if (confirmed) {
-                try {
-                    const response = await fetch(`/api/dashboard/${dashboardId}`, {
-                        method: 'DELETE',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRFToken': csrfToken
-                        }
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (response.ok) {
-                        alert('Dashboard deleted successfully!');
-                        window.location.reload();
-                    } else {
-                        alert(result.error || 'Failed to delete dashboard');
-                    }
-                } catch (error) {
-                    alert('Network error: ' + error.message);
-                }
-            }
+            pendingDeleteDashboard = { dashboardId, dashboardName };
+            deleteDashboardNameEl.textContent = dashboardName;
+            deleteDashboardModal.show();
         });
     });
 
@@ -355,13 +404,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const result = await response.json();
             
             if (response.ok) {
-                alert(result.message);
-                window.location.reload();
+                showFeedback('Invitation', result.message, true, true);
             } else {
-                alert(result.error || 'Failed to process invitation');
+                showFeedback('Invitation', result.error || 'Failed to process invitation', false);
             }
         } catch (error) {
-            alert('Network error: ' + error.message);
+            showFeedback('Invitation', 'Network error: ' + error.message, false);
         }
     }
 
@@ -410,14 +458,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     const result = await response.json();
                     
                     if (response.ok) {
-                        alert('Invitation sent successfully!');
+                        showFeedback('Invitation Sent', 'Invitation sent successfully!', true);
                         inviteEmailInput.value = '';
                         await loadDashboardMembers(dashboardId); // Refresh members list
                     } else {
-                        alert(result.error || 'Failed to send invitation');
+                        showFeedback('Invitation Failed', result.error || 'Failed to send invitation', false);
                     }
                 } catch (error) {
-                    alert('Network error: ' + error.message);
+                    showFeedback('Invitation Failed', 'Network error: ' + error.message, false);
                 }
             };
             
@@ -466,11 +514,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 button.addEventListener('click', async function() {
                     const userId = this.getAttribute('data-user-id');
                     const userName = this.getAttribute('data-user-name');
-                    
-                    const confirmed = confirm(`Are you sure you want to remove ${userName} from this dashboard?`);
-                    if (confirmed) {
-                        await removeDashboardMember(dashboardId, userId);
-                    }
+                    pendingRemoval = { dashboardId, userId };
+                    removeMemberName.textContent = userName;
+                    removeMemberModal.show();
                 });
             });
             
@@ -483,20 +529,65 @@ document.addEventListener('DOMContentLoaded', function() {
     async function removeDashboardMember(dashboardId, userId) {
         try {
             const response = await fetch(`/api/dashboard/${dashboardId}/members/${userId}`, {
-                method: 'DELETE'
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': csrfToken
+                }
             });
             
             if (response.ok) {
-                alert('Member removed successfully');
+                showFeedback('Member Removed', 'Member removed successfully', true);
+                removeMemberModal.hide();
                 await loadDashboardMembers(dashboardId); // Refresh the list
+                pendingRemoval = null;
             } else {
                 const result = await response.json();
-                alert(result.error || 'Failed to remove member');
+                showFeedback('Remove Failed', result.error || 'Failed to remove member', false);
             }
             
         } catch (error) {
             console.error('Error removing member:', error);
-            alert('Failed to remove member');
+            showFeedback('Remove Failed', 'Failed to remove member', false);
+        }
+    }
+
+    confirmRemoveMemberBtn.addEventListener('click', async function() {
+        if (pendingRemoval) {
+            await removeDashboardMember(pendingRemoval.dashboardId, pendingRemoval.userId);
+        }
+    });
+
+    confirmDeleteDashboardBtn.addEventListener('click', async function() {
+        if (!pendingDeleteDashboard) return;
+        const { dashboardId } = pendingDeleteDashboard;
+        try {
+            const response = await fetch(`/api/dashboard/${dashboardId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                }
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok) {
+                deleteDashboardModal.hide();
+                showFeedback('Dashboard Deleted', 'Dashboard deleted successfully!', true, true);
+            } else {
+                showFeedback('Delete Failed', result.error || 'Failed to delete dashboard', false);
+            }
+        } catch (error) {
+            showFeedback('Delete Failed', 'Network error: ' + error.message, false);
+        }
+    });
+
+    function showFeedback(title, message, success, reload=false) {
+        feedbackModalTitle.textContent = title;
+        feedbackModalBody.textContent = message;
+        feedbackModal.show();
+        if (reload && success) {
+            feedbackModalEl.addEventListener('hidden.bs.modal', () => window.location.reload(), { once: true });
         }
     }
 

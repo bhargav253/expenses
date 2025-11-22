@@ -21,24 +21,24 @@ body {
 
 /* Hero section styling - Splitwise style */
 .hero-section {
-    background: linear-gradient(135deg, var(--splitwise-green) 0%, var(--splitwise-blue) 100%);
+    background: #d7f5d5;
     border-radius: 0;
-    color: white;
+    color: var(--splitwise-text);
     padding: 3rem 1rem;
     margin-bottom: 0;
     text-align: center;
 }
 
 .hero-section h1 {
-    font-weight: 600;
+    font-weight: 700;
     font-size: 2.5rem;
     margin-bottom: 1rem;
 }
 
 .hero-section .lead {
     font-size: 1.1rem;
-    opacity: 0.9;
-    font-weight: 400;
+    opacity: 1;
+    font-weight: 500;
 }
 
 /* Feature icons */
