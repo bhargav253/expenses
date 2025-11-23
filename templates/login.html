@@ -4,12 +4,14 @@
 
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header text-center">
-                <h4 class="mb-0"><i class="fas fa-sign-in-alt me-2"></i>Login to Your Account</h4>
+    <div class="col-md-7 col-lg-5">
+        <div class="card auth-card">
+            <div class="card-header bg-white text-center border-0 pt-4">
+                <p class="text-uppercase text-muted small mb-1 fw-semibold">Welcome back</p>
+                <h4 class="mb-0 fw-bold"><i class="fas fa-sign-in-alt me-2"></i>Login to Your Account</h4>
+                <p class="text-muted small mt-2 mb-0">Secure, AI-powered expense collaboration.</p>
             </div>
-            <div class="card-body">
+            <div class="card-body pt-1 pb-4 px-4">
                 {% with messages = get_flashed_messages(with_categories=true) %}
                     {% if messages %}
                         {% for category, message in messages %}
@@ -54,7 +56,7 @@
                 <div class="text-center mt-4">
                     <hr>
                     <p class="text-muted mb-3">Or continue with</p>
-                    <a href="{{ url_for('google_login') }}" class="btn btn-outline-secondary">
+                    <a href="{{ url_for('google_login') }}" class="btn btn-outline-primary">
                         <i class="fab fa-google me-2"></i>Google
                     </a>
                 </div>

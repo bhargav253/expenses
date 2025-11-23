@@ -23,13 +23,13 @@
 
     {% if owner_dashboards %}
     <div class="mb-5">
-        <h4 class="mb-4"><i class="fas fa-crown me-2 text-warning"></i>My Dashboards (Owner)</h4>
+        <h4 class="mb-4"><i class="fas fa-crown me-2 text-success"></i>My Dashboards</h4>
         <div class="row">
             {% for dashboard in owner_dashboards %}
             <div class="col-md-6 col-lg-4 mb-4">
-                <div class="card h-100 shadow-sm border-warning">
-                    <div class="card-header bg-warning text-dark">
-                        <h6 class="mb-0"><i class="fas fa-crown me-2"></i>Owner</h6>
+                <div class="card h-100 shadow-sm">
+                    <div class="card-header bg-success text-white">
+                        <h6 class="mb-0"><i class="fas fa-crown me-2"></i>Own</h6>
                     </div>
                     <div class="card-body">
                         <h5 class="card-title">{{ dashboard.name }}</h5>
@@ -83,13 +83,13 @@
 
     {% if member_dashboards %}
     <div class="mb-5">
-        <h4 class="mb-4"><i class="fas fa-user me-2 text-primary"></i>Shared Dashboards (Member)</h4>
+        <h4 class="mb-4"><i class="fas fa-chess-knight me-2 text-primary"></i>Shared Dashboards</h4>
         <div class="row">
             {% for dashboard in member_dashboards %}
             <div class="col-md-6 col-lg-4 mb-4">
                 <div class="card h-100 shadow-sm border-primary">
                     <div class="card-header bg-primary text-white">
-                        <h6 class="mb-0"><i class="fas fa-user me-2"></i>Member</h6>
+                        <h6 class="mb-0"><i class="fas fa-chess-knight me-2"></i>Shared dashboard</h6>
                     </div>
                     <div class="card-body">
                         <h5 class="card-title">{{ dashboard.name }}</h5>
