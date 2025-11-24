@@ -15,7 +15,7 @@
             <i class="fas fa-arrow-left me-1"></i>Back to Dashboards
         </a>
         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#shareDashboardModal">
-            <i class="fas fa-share me-1"></i>Share
+            <i class="fas fa-user-plus me-1"></i>Invite
         </button>
     </div>
 </div>
@@ -46,15 +46,13 @@
         <div class="row">
             <div class="col-lg-8">
                 <div class="card">
-                    <div class="card-header bg-primary text-white">
+                    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
                         <h5 class="mb-0"><i class="fas fa-upload me-2"></i>Upload Data</h5>
+                        <span class="badge bg-light text-primary d-none d-md-inline-flex align-items-center">
+                            <i class="fas fa-shield-alt me-2"></i>Secure by design
+                        </span>
                     </div>
                     <div class="card-body">
-                        <div class="alert alert-info">
-                            <i class="fas fa-info-circle me-2"></i>
-                            <strong>Security Note:</strong> PDF and CSV files are sent securely to our backend for parsing and AI processing.
-                            We validate file types, enforce size limits, and encrypt stored excerpts to protect your data.
-                        </div>
                         
                         <!-- Two Option Layout -->
                         <div class="row mb-4">
@@ -244,7 +242,7 @@
                 </div>
                 
                 <div class="card mt-4">
-                    <div class="card-header bg-warning text-dark">
+                    <div class="card-header bg-info text-white">
                         <h5 class="mb-0"><i class="fas fa-users me-2"></i>Dashboard Members</h5>
                     </div>
                     <div class="card-body">
@@ -302,11 +300,6 @@
     
     <!-- Monthly Expenses Tab -->
     <div class="tab-pane fade" id="monthly" role="tabpanel">
-        <div class="alert alert-info mb-4">
-            <i class="fas fa-info-circle me-2"></i>
-            Interactive expense table - edit directly like Google Sheets. Changes are saved automatically.
-        </div>
-        
         <div class="row">
             <div class="col-md-8">
                 <div class="card">
@@ -332,6 +325,17 @@
                         </div>
                     </div>
                     <div class="card-body">
+                        <div id="mobileTableActions" class="d-flex gap-2 mb-3 d-md-none">
+                            <button class="btn btn-outline-primary btn-sm" id="mobileAddRow">
+                                <i class="fas fa-plus me-1"></i>Add row
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm" id="mobileRemoveRow">
+                                <i class="fas fa-trash me-1"></i>Delete row
+                            </button>
+                            <button class="btn btn-success btn-sm" id="mobileSaveRow">
+                                <i class="fas fa-save me-1"></i>Save row
+                            </button>
+                        </div>
                         <div id="monthlyExpensesTable" class="table-responsive">
                             <!-- Handsontable will be initialized here -->
                         </div>
@@ -340,7 +344,7 @@
             </div>
             <div class="col-md-4">
                 <div class="card">
-                    <div class="card-header bg-success text-white">
+                    <div class="card-header bg-primary text-white">
                         <h5 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Category Breakdown</h5>
                     </div>
                     <div class="card-body">
@@ -378,16 +382,16 @@
     </div>
 </div>
 
-<!-- Share Dashboard Modal -->
+<!-- Invite Dashboard Modal -->
 <div class="modal fade" id="shareDashboardModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Share Dashboard</h5>
+                <h5 class="modal-title">Invite to Dashboard</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p class="text-muted">Share this dashboard with other users by entering their email addresses.</p>
+                <p class="text-muted">Invite teammates by email to collaborate on this dashboard.</p>
                 <div class="mb-3">
                     <label for="shareEmail" class="form-label">Email Address</label>
                     <input type="email" class="form-control" id="shareEmail" placeholder="Enter email address">
@@ -400,6 +404,28 @@
                     <i class="fas fa-envelope me-1"></i>Send Invitation
                 </button>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Toast container for inline notices -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="monthlyInfoToast" class="toast align-items-center text-bg-primary border-0" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="4500" data-bs-autohide="true">
+        <div class="d-flex">
+            <div class="toast-body">
+                <i class="fas fa-info-circle me-2"></i>
+                Interactive expense table — edit like Sheets; changes autosave.
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+    </div>
+    <div id="securityToast" class="toast align-items-center text-bg-info border-0" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="4800" data-bs-autohide="true">
+        <div class="d-flex">
+            <div class="toast-body">
+                <i class="fas fa-shield-alt me-2"></i>
+                Uploads are validated server-side with MIME checks, size limits, and encrypted storage.
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
         </div>
     </div>
 </div>

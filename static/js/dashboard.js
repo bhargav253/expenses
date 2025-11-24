@@ -8,6 +8,9 @@ class DashboardManager {
         this.currentCsvData = null;
         this.csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
         this.isTouchDevice = this.detectTouchDevice();
+        this.lastSelectionRange = null;
+        this.monthlyToastShown = false;
+        this.securityToastShown = false;
         this.init();
     }
 
@@ -631,6 +634,78 @@ class DashboardManager {
         
         // Initialize DataTables for yearly view
         this.initYearlyTable();
+
+        // Mobile-friendly row controls for Handsontable
+        this.setupMobileMonthlyActions();
+    }
+
+    setupMobileMonthlyActions() {
+        if (!this.isTouchDevice) return;
+
+        const addBtn = document.getElementById('mobileAddRow');
+        const removeBtn = document.getElementById('mobileRemoveRow');
+        const saveBtn = document.getElementById('mobileSaveRow');
+
+        const buildSelection = (forAdd = false) => {
+            if (!this.monthlyTable) {
+                Utils.showNotification('Table not ready', 'warning');
+                return null;
+            }
+            const sel = this.monthlyTable.getSelectedLast();
+            const memo = this.lastSelectionRange;
+            let selectionObj = null;
+
+            if (sel && sel.length === 4) {
+                const [r1, c1, r2, c2] = sel;
+                selectionObj = {
+                    start: { row: Math.min(r1, r2), col: Math.min(c1, c2) },
+                    end: { row: Math.max(r1, r2), col: Math.max(c1, c2) }
+                };
+            } else if (memo) {
+                selectionObj = memo;
+            }
+
+            if (!selectionObj) {
+                Utils.showNotification('Tap a cell first to choose a row', 'info');
+                return null;
+            }
+
+            let targetRow = selectionObj.start.row;
+            if (forAdd) {
+                targetRow = targetRow + 1; // mimic "insert below" for mobile
+            }
+            return [{
+                start: { row: targetRow, col: selectionObj.start.col },
+                end: { row: targetRow, col: selectionObj.end.col }
+            }];
+        };
+
+        if (addBtn) {
+            addBtn.addEventListener('click', () => {
+                const selection = buildSelection(true);
+                if (selection) {
+                    this.handleRowAddition(selection);
+                }
+            });
+        }
+
+        if (removeBtn) {
+            removeBtn.addEventListener('click', () => {
+                const selection = buildSelection(false);
+                if (selection) {
+                    this.handleRowRemoval(selection);
+                }
+            });
+        }
+
+        if (saveBtn) {
+            saveBtn.addEventListener('click', async () => {
+                const selection = buildSelection(false);
+                if (!selection || !this.monthlyTable) return;
+                const rowIndex = selection[0].start.row;
+                await this.saveNewRow(rowIndex);
+            });
+        }
     }
 
     setupEventListeners() {
@@ -640,6 +715,7 @@ class DashboardManager {
             tab.addEventListener('shown.bs.tab', (event) => {
                 const target = event.target.getAttribute('data-bs-target');
                 if (target === '#monthly') {
+                    this.showMonthlyToast();
                     // Get the currently selected month from dropdown and load data for that month
                     const dropdownButton = document.getElementById('monthDropdown');
                     if (dropdownButton) {
@@ -653,9 +729,29 @@ class DashboardManager {
                     }
                 } else if (target === '#yearly') {
                     this.refreshYearlyData();
+                } else if (target === '#ingress') {
+                    this.showSecurityToast();
                 }
             });
         });
+    }
+
+    showMonthlyToast() {
+        if (this.monthlyToastShown) return;
+        const toastEl = document.getElementById('monthlyInfoToast');
+        if (!toastEl || !window.bootstrap) return;
+        const toast = bootstrap.Toast.getOrCreateInstance(toastEl);
+        toast.show();
+        this.monthlyToastShown = true;
+    }
+
+    showSecurityToast() {
+        if (this.securityToastShown) return;
+        const toastEl = document.getElementById('securityToast');
+        if (!toastEl || !window.bootstrap) return;
+        const toast = bootstrap.Toast.getOrCreateInstance(toastEl);
+        toast.show();
+        this.securityToastShown = true;
     }
 
     getSelectedMonthFromDropdown() {
@@ -1401,6 +1497,10 @@ class DashboardManager {
             
             afterSelection: (row, column, row2, column2, preventScrolling) => {
                 debug.log('Cell selected:', { row, column });
+                this.lastSelectionRange = {
+                    start: { row: Math.min(row, row2), col: Math.min(column, column2) },
+                    end: { row: Math.max(row, row2), col: Math.max(column, column2) }
+                };
             },
             
         });
@@ -2158,6 +2258,10 @@ class DashboardManager {
     }
     
     addSaveButtonToRow(rowIndex) {
+        // Desktop/tablet only: show inline save buttons; skip on touch/mobile since we have top-level action
+        if (this.isTouchDevice) {
+            return;
+        }
         // Create a save button element
         const saveButton = document.createElement('button');
         saveButton.className = 'btn btn-sm btn-success save-row-btn';
