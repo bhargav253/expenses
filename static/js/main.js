@@ -143,6 +143,11 @@ const ApiClient = {
             body: data
         }),
         
+        bulkCreate: (dashboardId, expenses) => ApiClient.request(`/api/dashboard/${dashboardId}/expenses/bulk`, {
+            method: 'POST',
+            body: { expenses }
+        }),
+        
         get: (dashboardId) => {
             const ts = Date.now();
             return ApiClient.request(`/api/dashboard/${dashboardId}/expenses?_=${ts}`);

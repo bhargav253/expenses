@@ -1261,22 +1261,25 @@ class DashboardManager {
                 return;
             }
             
-            // Save each expense to the database
+            // Save all expenses in one bulk call
             let savedCount = 0;
-            for (const expense of expenses) {
-                try {
-                    debug.log('Attempting to save expense (direct):', expense);
-                    const result = await ApiClient.expenses.create(this.dashboardId, expense);
-                    debug.log('Save result (direct):', result);
-                    savedCount++;
-                } catch (error) {
-                    debug.error('Error saving expense (direct):', error);
-                    debug.error('Error details (direct):', error.message);
+            try {
+                const result = await ApiClient.expenses.bulkCreate(this.dashboardId, expenses);
+                debug.log('Bulk save result:', result);
+                savedCount = result.saved || 0;
+                if (result.errors && result.errors.length) {
+                    Utils.showNotification(`Saved ${savedCount} expenses. ${result.errors.length} failed validation.`, 'warning');
+                } else {
+                    Utils.showNotification(`Successfully saved ${savedCount} expenses to the database`, 'success');
                 }
+            } catch (error) {
+                debug.error('Error saving expense (bulk):', error);
+                debug.error('Error details (bulk):', error.message);
+                Utils.showNotification('Error saving data to database', 'danger');
+                return;
             }
             
             debug.log(`Total expenses saved (direct): ${savedCount}`);
-            Utils.showNotification(`Successfully saved ${savedCount} expenses to the database`, 'success');
             
             // Refresh all components after data ingress
             await this.refreshAllComponents();
@@ -1442,7 +1445,8 @@ class DashboardManager {
             manualColumnResize: !isTouch,
             manualRowMove: !isTouch,
             licenseKey: 'non-commercial-and-evaluation',
-            height: isTouch ? 'auto' : 400, // Allow natural height on touch to reduce nested scrolling
+            height: 'auto', // Natural height so long lists aren't clipped; page scrolls instead
+            renderAllRows: true,
             stretchH: 'all',
             preventOverflow: 'horizontal',
             selectionMode: isTouch ? 'single' : 'range',

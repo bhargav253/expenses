@@ -2077,6 +2077,71 @@ def create_expense(dashboard_id):
         })
         return jsonify({'error': f'Failed to create expense: {str(e)}'}), 400
 
+
+@app.route('/api/dashboard/<int:dashboard_id>/expenses/bulk', methods=['POST'])
+def create_expenses_bulk(dashboard_id):
+    """
+    Create multiple expenses in one request to reduce client-side request bursts.
+    Accepts JSON payload: {"expenses": [ {date, description, amount, category}, ... ]}
+    """
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id,
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    payload = request.get_json() or {}
+    expenses_payload = payload.get('expenses')
+    
+    if not isinstance(expenses_payload, list):
+        return jsonify({'error': 'Invalid payload: "expenses" must be a list'}), 400
+    
+    saved = 0
+    errors = []
+    
+    for idx, expense_data in enumerate(expenses_payload):
+        try:
+            validated = validate_expense_data(expense_data)
+            expense = Expense(
+                dashboard_id=dashboard_id,
+                user_id=session['user_id'],
+                date=datetime.strptime(validated['date'], '%Y-%m-%d').date(),
+                description=validated['description'],
+                amount=float(validated['amount']),
+                category=validated.get('category', 'misc')
+            )
+            db.session.add(expense)
+            saved += 1
+        except ValueError as e:
+            errors.append({'index': idx, 'error': str(e)})
+        except Exception as e:
+            errors.append({'index': idx, 'error': f'Unexpected error: {str(e)}'})
+    
+    if saved > 0:
+        db.session.commit()
+    else:
+        db.session.rollback()
+    
+    logger.info(
+        "Bulk expense import",
+        extra={
+            'user_id': session['user_id'],
+            'dashboard_id': dashboard_id,
+            'saved': saved,
+            'errors': len(errors)
+        }
+    )
+    
+    return jsonify({
+        'message': f'Bulk import completed: {saved} saved, {len(errors)} failed',
+        'saved': saved,
+        'errors': errors
+    }), 200
+
 @app.route('/api/dashboard/<int:dashboard_id>/expenses/<int:expense_id>', methods=['PUT'])
 def update_expense(dashboard_id, expense_id):
     if 'user_id' not in session:
