@@ -7,7 +7,7 @@ from authlib.integrations.flask_client import OAuth
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import CSRFError, generate_csrf
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import requests
 import uuid
@@ -21,6 +21,7 @@ import html
 from logging.handlers import RotatingFileHandler
 from security_utils import decrypt_str, encrypt_str, encryption_enabled
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 # Security Configuration
 # ======================
@@ -329,6 +330,109 @@ def validate_expense_data(expense_data):
     
     return expense_data
 
+def validate_safe_sql(sql_text: str) -> bool:
+    """Basic guardrail to ensure generated SQL is read-only and scoped."""
+    lowered = sql_text.strip().lower()
+    # Autocorrect common AI typo missing leading 's'
+    if lowered.startswith('elect '):
+        lowered = 's' + lowered
+    banned = ['insert', 'update', 'delete', 'drop', 'alter', 'truncate', 'create', ';', '--']
+    if any(token in lowered for token in banned):
+        return False
+    # Must start with select
+    if not lowered.strip().startswith('select'):
+        return False
+    # Only allow referencing expense table
+    if ' expense' not in lowered:
+        return False
+    return True
+
+def generate_ai_analytics_sql(user, prompt):
+    """Ask the configured AI provider to produce a safe SELECT for analytics."""
+    # Respect test mode / missing keys
+    model_key = user.default_ai_provider or 'mistral'
+    model_config = AI_MODELS.get(model_key)
+    print(f"MC -> {model_config} | MK -> {model_key}")
+    if not model_config:
+        return None
+    api_key = user.get_decrypted_api_key(model_config['api_key_field'])
+    if not api_key:
+        return None
+
+    print("going in")
+    
+    url = model_config['api_url']
+    model_name = model_config['model_name']
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    system_prompt = """
+You are a SQL assistant for the "expense" table with columns: id, dashboard_id, user_id, date (YYYY-MM-DD), description, amount, category, user_name.
+Return a JSON object with keys: chart_type (bar|pie|table), sql (SELECT ...), summary (short).
+Rules:
+- Only SELECT statements. No DML/DDL.
+- Always alias the first column as label and the numeric aggregate as value.
+- For bar charts, group by month: strftime('%Y-%m', date) as label, SUM(amount) as value, ordered by month.
+- For pie charts, group by category: category as label, SUM(amount) as value.
+- For tables, mirror the bar/pie grouping but still return label/value columns.
+- Scope to the dashboard_id provided in the input.
+- If the user mentions years, filter by those years.
+- If the user mentions a category, filter category case-insensitively.
+Respond ONLY with JSON, no prose.
+"""
+
+    user_message = f"""
+User request: {prompt}
+Dashboard scope: use dashboard_id = {{dashboard_id}}
+Output JSON keys: chart_type, sql, summary.
+Example SQL for bar: SELECT strftime('%Y-%m', date) as label, SUM(amount) as value FROM expense WHERE dashboard_id={{dashboard_id}} GROUP BY label ORDER BY label;
+"""
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ],
+        "temperature": 0.2,
+        "max_tokens": 500
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        ai_message = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+        print(f"nice --> {ai_message}")
+        parsed = None
+        try:
+            parsed = json.loads(ai_message)
+        except Exception:
+            # Try to extract JSON block if wrapped
+            import re as _re
+            match = _re.search(r'\{.*\}', ai_message, _re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+        if not parsed:
+            return None
+        sql_text = parsed.get('sql', '')
+        chart_type = parsed.get('chart_type', 'bar')
+        summary = parsed.get('summary', '')
+        if not sql_text or not validate_safe_sql(sql_text):
+            return None
+        logger.info(f"AI analytics SQL generation succesful: {sql_text}")
+        return {
+            'sql': sql_text,
+            'chart_type': chart_type,
+            'summary': summary
+        }
+    except Exception as e:
+        logger.error(f"AI analytics SQL generation failed: {e}")
+        print(f"failed?")        
+        return None
+
 # AI Model Configuration
 AI_MODELS = {
     'deepseek': {
@@ -378,7 +482,7 @@ google = oauth.register(
 )
 
 # Import models
-from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction
+from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession
 
 # Initialize database tables
 def init_db():
@@ -1955,6 +2059,28 @@ def update_dashboard_settings(dashboard_id):
         'edit_mode': settings.edit_mode
     })
 
+# Analytics helper
+def parse_analytics_prompt(prompt: str):
+    text = (prompt or '').lower()
+    years = re.findall(r'20\d{2}', text)
+    years = sorted(set(years))
+    categories = [c for c in EXPENSE_CATEGORIES if c.lower() in text]
+    
+    chart_type = 'bar'
+    if any(k in text for k in ['percent', 'percentage', 'share', 'breakdown', 'vs', 'versus']):
+        chart_type = 'pie'
+    if any(k in text for k in ['table', 'list', 'grid', 'show table']):
+        chart_type = 'table'
+    
+    target_category = categories[0] if categories else None
+    
+    return {
+        'chart_type': chart_type,
+        'years': years,
+        'category': target_category,
+        'categories': categories
+    }
+
 # Expense Management Endpoints
 @app.route('/api/dashboard/<int:dashboard_id>/expenses', methods=['GET'])
 def get_expenses(dashboard_id):
@@ -2142,6 +2268,301 @@ def create_expenses_bulk(dashboard_id):
         'errors': errors
     }), 200
 
+
+@app.route('/api/dashboard/<int:dashboard_id>/analytics/query', methods=['POST'])
+def analytics_query(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id,
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    data = request.get_json() or {}
+    prompt = data.get('prompt', '')
+    session_id = data.get('session_id')
+    parsed = parse_analytics_prompt(prompt)
+    now_ts = datetime.utcnow()
+    
+    # Load or create analytics session
+    analytics_session = None
+    if session_id:
+        analytics_session = AnalyticsSession.query.filter_by(
+            session_id=session_id,
+            dashboard_id=dashboard_id,
+            user_id=session['user_id']
+        ).first()
+        if analytics_session and analytics_session.expires_at and analytics_session.expires_at < now_ts:
+            analytics_session.status = 'expired'
+            db.session.commit()
+            analytics_session = None
+
+    if not analytics_session:
+        analytics_session = AnalyticsSession(
+            session_id=str(uuid.uuid4()),
+            dashboard_id=dashboard_id,
+            user_id=session['user_id'],
+            expires_at=now_ts + timedelta(hours=1)
+        )
+        db.session.add(analytics_session)
+        db.session.commit()
+
+    multi_categories = parsed.get('categories', [])
+    use_multi_series = len(multi_categories) > 1 and parsed['chart_type'] != 'pie'
+
+    # Always try AI-generated SQL first; fall back to deterministic if missing/invalid
+    ai_plan = generate_ai_analytics_sql(member.user, prompt)
+    if ai_plan:
+        logger.debug("Analytics AI plan received", extra={'plan': ai_plan, 'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+    if ai_plan:
+        try:
+            sql_text = ai_plan['sql'].replace('{dashboard_id}', str(dashboard_id))
+            # Normalize table name if AI returns plural
+            table_name = Expense.__tablename__
+            sql_text = sql_text.replace(' expenses', f' {table_name}').replace('Expenses', table_name).replace('Expenses', table_name)
+            if not validate_safe_sql(sql_text):
+                raise ValueError("Unsafe SQL detected")
+            results = db.session.execute(text(sql_text)).all()
+            labels = []
+            rows = []
+            datasets = []
+            data_points = []
+
+            # Detect multi-series or category/month pivot
+            if results:
+                keys = list(results[0]._mapping.keys())
+                has_month = any(k.lower() == 'month' for k in keys)
+                # Special case: category + month + single value column
+                if has_month and any(k.lower() in ['label', 'category'] for k in keys):
+                    label_key = next((k for k in keys if k.lower() == 'month'), keys[0])
+                    category_key = next((k for k in keys if k.lower() in ['label', 'category']), None)
+                    value_keys = [k for k in keys if k not in [label_key, category_key] and k.lower() != 'month']
+                    if not value_keys and len(keys) >= 3:
+                        # Assume third column is value
+                        value_keys = [k for k in keys if k not in [label_key, category_key]][:1]
+                    month_set = set()
+                    category_set = set()
+                    series_map = {}
+                    for r in results:
+                        month_val = getattr(r, label_key)
+                        cat_val = getattr(r, category_key) if category_key else 'series'
+                        month_set.add(month_val)
+                        category_set.add(cat_val)
+                        if cat_val not in series_map:
+                            series_map[cat_val] = {}
+                        for vk in value_keys:
+                            raw_val = getattr(r, vk)
+                            try:
+                                series_map[cat_val][month_val] = float(raw_val or 0)
+                            except (TypeError, ValueError):
+                                series_map[cat_val][month_val] = 0.0
+                    labels = sorted(month_set)
+                    datasets = []
+                    for cat in sorted(category_set):
+                        data_series = []
+                        for m in labels:
+                            data_series.append(series_map.get(cat, {}).get(m, 0.0))
+                        datasets.append({'label': cat, 'data': data_series})
+                    rows = []
+                    for m in labels:
+                        row_obj = {'label': m}
+                        for ds in datasets:
+                            row_obj[ds['label']] = series_map.get(ds['label'], {}).get(m, 0.0)
+                        rows.append(row_obj)
+                # Multi-aggregate columns -> datasets per aggregate
+                elif len(keys) > 2:
+                    label_key = next((k for k in keys if k.lower() == 'label'), keys[0])
+                    value_keys = [k for k in keys if k != label_key]
+                    series_data = {k: [] for k in value_keys}
+                    for r in results:
+                        labels.append(getattr(r, label_key))
+                        for k in value_keys:
+                            raw_val = getattr(r, k)
+                            try:
+                                series_data[k].append(float(raw_val or 0))
+                            except (TypeError, ValueError):
+                                series_data[k].append(0.0)
+                    datasets = [{'label': k, 'data': series_data[k]} for k in value_keys]
+                    for idx, lbl in enumerate(labels):
+                        row_obj = {'label': lbl}
+                        for k in value_keys:
+                            row_obj[k] = series_data[k][idx]
+                        rows.append(row_obj)
+                else:
+                    for r in results:
+                        label = r[0]
+                        value = float(r[1]) if len(r) > 1 else 0.0
+                        labels.append(label)
+                        data_points.append(value)
+                        rows.append({'label': label, 'value': value})
+            
+            # Map AI chart_type to our supported types
+            ctype = ai_plan.get('chart_type', 'bar')
+            if ctype not in ['bar', 'pie', 'table', 'line']:
+                ctype = 'bar'
+            # If we have multiple value series, prefer line chart
+            if datasets and ctype != 'pie':
+                ctype = 'line'
+            
+            if ctype == 'table' and datasets:
+                # Prefer a chart when datasets are present
+                ctype = 'line'
+
+            if ctype == 'table':
+                resp = {
+                    'chart_type': 'table',
+                    'rows': rows if rows else [{'label': lbl, 'value': val} for lbl, val in zip(labels, data_points)],
+                    'summary': ai_plan.get('summary', ''),
+                    'session_id': analytics_session.session_id
+                }
+            else:
+                resp = {
+                    'chart_type': 'line' if datasets else ctype,
+                    'labels': labels,
+                    'data': data_points if not datasets else None,
+                    'datasets': datasets if datasets else None,
+                    'summary': ai_plan.get('summary', ''),
+                    'session_id': analytics_session.session_id
+                }
+            analytics_session.add_entry('user', prompt)
+            analytics_session.add_entry('assistant', resp.get('summary', ''))
+            analytics_session.expires_at = now_ts + timedelta(hours=1)
+            db.session.commit()
+            return jsonify(resp)
+        except Exception as e:
+            logger.warning(f"AI analytics fallback due to error: {e}")
+            # Fall through to deterministic parsing
+    else:
+        logger.debug("Analytics AI plan missing or AI disabled", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+    
+    # Deterministic fallback
+    query = Expense.query.filter_by(dashboard_id=dashboard_id)
+    
+    # Filter years if provided
+    if parsed['years']:
+        query = query.filter(db.func.strftime('%Y', Expense.date).in_(parsed['years']))
+    
+    # Filter category if specified
+    if parsed['category']:
+        query = query.filter(db.func.lower(Expense.category) == parsed['category'].lower())
+    elif use_multi_series and multi_categories:
+        query = query.filter(db.func.lower(Expense.category).in_([c.lower() for c in multi_categories]))
+    
+    if parsed['chart_type'] == 'pie':
+        results = query.with_entities(
+            Expense.category.label('category'),
+            db.func.sum(Expense.amount).label('total')
+        ).group_by(Expense.category).all()
+        
+        labels = [r.category for r in results]
+        data_points = [float(r.total) for r in results]
+        year_text = ''
+        if parsed['years']:
+            year_text = ' for ' + ', '.join(parsed['years'])
+        summary = f"Category breakdown{year_text}"
+        return jsonify({
+            'chart_type': 'pie',
+            'labels': labels,
+            'data': data_points,
+            'summary': summary
+        })
+    elif parsed['chart_type'] == 'table':
+        if parsed['category']:
+            # Table by month for the category
+            results = query.with_entities(
+                db.func.strftime('%Y-%m', Expense.date).label('month'),
+                db.func.sum(Expense.amount).label('total')
+            ).group_by('month').order_by('month').all()
+            rows = [{'label': r.month, 'value': float(r.total)} for r in results]
+            summary = f"Table for {parsed['category']} by month"
+        else:
+            results = query.with_entities(
+                Expense.category.label('category'),
+                db.func.sum(Expense.amount).label('total')
+            ).group_by(Expense.category).order_by(Expense.category).all()
+            rows = [{'label': r.category, 'value': float(r.total)} for r in results]
+            summary = "Table of category totals"
+        return jsonify({
+            'chart_type': 'table',
+            'rows': rows,
+            'summary': summary
+        })
+    else:
+        # Default to bar trend by month
+        if use_multi_series and multi_categories:
+            # Pivot by category per month
+            results = query.with_entities(
+                db.func.strftime('%Y-%m', Expense.date).label('month'),
+                db.func.lower(Expense.category).label('category'),
+                db.func.sum(Expense.amount).label('total')
+            ).group_by('month', 'category').order_by('month').all()
+
+            months = sorted({r.month for r in results})
+            cat_set = sorted({r.category for r in results})
+            datasets = []
+            for cat in cat_set:
+                cat_data = []
+                for m in months:
+                    val = next((float(r.total) for r in results if r.month == m and r.category == cat), 0.0)
+                    cat_data.append(val)
+                datasets.append({'label': cat, 'data': cat_data})
+
+            summary = f"Trend by month for categories: {', '.join(cat_set)}"
+            resp = {
+                'chart_type': 'line',
+                'labels': months,
+                'datasets': datasets,
+                'summary': summary,
+                'session_id': analytics_session.session_id
+            }
+            analytics_session.add_entry('user', prompt)
+            analytics_session.add_entry('assistant', summary)
+            analytics_session.expires_at = now_ts + timedelta(hours=1)
+            db.session.commit()
+            return jsonify(resp)
+        else:
+            results = query.with_entities(
+                db.func.strftime('%Y-%m', Expense.date).label('month'),
+                db.func.sum(Expense.amount).label('total')
+            ).group_by('month').order_by('month').all()
+            
+            labels = [r.month for r in results]
+            data_points = [float(r.total) for r in results]
+            cat_label = parsed['category'] or 'all categories'
+            summary = f"Trend for {cat_label} by month"
+            resp = {
+                'chart_type': 'bar',
+                'labels': labels,
+                'data': data_points,
+                'summary': summary,
+                'session_id': analytics_session.session_id
+            }
+            analytics_session.add_entry('user', prompt)
+            analytics_session.add_entry('assistant', summary)
+            analytics_session.expires_at = now_ts + timedelta(hours=1)
+            db.session.commit()
+            return jsonify(resp)
+
+@app.route('/api/dashboard/<int:dashboard_id>/analytics/session/<string:session_id>', methods=['DELETE'])
+def cancel_analytics_session(dashboard_id, session_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    sess = AnalyticsSession.query.filter_by(
+        dashboard_id=dashboard_id,
+        user_id=session['user_id'],
+        session_id=session_id
+    ).first()
+    if not sess:
+        return jsonify({'error': 'Session not found'}), 404
+    
+    db.session.delete(sess)
+    db.session.commit()
+    return jsonify({'message': 'Analytics context cleared'})
+
 @app.route('/api/dashboard/<int:dashboard_id>/expenses/<int:expense_id>', methods=['PUT'])
 def update_expense(dashboard_id, expense_id):
     if 'user_id' not in session:
@@ -2156,6 +2577,26 @@ def update_expense(dashboard_id, expense_id):
     ).first()
     if not member:
         return jsonify({'error': 'Access denied'}), 403
+
+    # Load or create analytics session
+    analytics_session = None
+    if session_id:
+        analytics_session = AnalyticsSession.query.filter_by(session_id=session_id, dashboard_id=dashboard_id, user_id=session['user_id']).first()
+        # Expire if past
+        if analytics_session and analytics_session.expires_at and analytics_session.expires_at < now_ts:
+            analytics_session.status = 'expired'
+            db.session.commit()
+            analytics_session = None
+
+    if not analytics_session:
+        analytics_session = AnalyticsSession(
+            session_id=str(uuid.uuid4()),
+            dashboard_id=dashboard_id,
+            user_id=session['user_id'],
+            expires_at=now_ts + timedelta(hours=1)
+        )
+        db.session.add(analytics_session)
+        db.session.commit()
     
     # Check if expense exists and belongs to this dashboard
     expense = Expense.query.filter_by(

@@ -20,6 +20,43 @@
     </div>
 </div>
 
+<!-- PDF Settings Modal -->
+<div class="modal fade" id="pdfSettingsModal" tabindex="-1" aria-labelledby="pdfSettingsModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="pdfSettingsModalLabel"><i class="fas fa-sliders me-2"></i>PDF Extraction Settings</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label for="pdfExtractionMethod" class="form-label">Extraction Method</label>
+                        <select class="form-select" id="pdfExtractionMethod">
+                            <option value="pypdf" selected>PyPDF (text-heavy)</option>
+                            <option value="camelot">Camelot (table-focused)</option>
+                        </select>
+                        <small class="form-text text-muted">
+                            PyPDF by default; switch to Camelot for table-centric statements.
+                        </small>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="pdfPageNumbers" class="form-label">Page Numbers</label>
+                        <input type="text" class="form-control" id="pdfPageNumbers" placeholder="e.g., 1,3,5 or leave blank for all pages">
+                        <small class="form-text text-muted">
+                            Specify pages to extract (comma-separated numbers)
+                        </small>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Done</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Dashboard Navigation -->
 <ul class="nav nav-tabs mb-4" id="dashboardTabs" role="tablist">
     <li class="nav-item" role="presentation">
@@ -35,6 +72,11 @@
     <li class="nav-item" role="presentation">
         <button class="nav-link" id="yearly-tab" data-bs-toggle="tab" data-bs-target="#yearly" type="button" role="tab">
             <i class="fas fa-chart-line me-1"></i>Yearly Overview
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="analytics-tab" data-bs-toggle="tab" data-bs-target="#analytics" type="button" role="tab">
+            <i class="fas fa-chart-pie me-1"></i>Analytics
         </button>
     </li>
 </ul>
@@ -108,11 +150,7 @@
                             <p class="text-muted mb-3">Upload files and chat with AI to process your expense data. The AI will maintain context throughout your session.</p>
                             
                             <!-- Chat Messages -->
-                            <div id="aiChatMessages" class="mb-3" style="max-height: 300px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 0.375rem; padding: 1rem;">
-                                <div class="chat-message assistant">
-                                    <strong>AI Assistant:</strong> Hello! I can help you process your expense data. You can upload PDF bank statements or CSV files, and I'll extract and process the data for you. What would you like to do?
-                                </div>
-                            </div>
+                            <div id="aiChatMessages" class="mb-3" style="max-height: 300px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 0.375rem; padding: 1rem;"></div>
                             
                             <!-- Chat Input -->
                             <div class="input-group mb-3">
@@ -124,45 +162,22 @@
                             
                             <!-- File Upload Area -->
                             <div class="border-dashed p-3 mb-3">
-                                <div class="d-flex align-items-center justify-content-between">
+                                <div class="d-flex align-items-start justify-content-between">
                                     <div>
                                         <i class="fas fa-file-upload text-muted me-2"></i>
                                         <span class="text-muted">Upload PDF or CSV file</span>
+                                        <div class="mt-2">
+                                            <small class="text-muted d-block">Supported formats: CSV, PDF (bank statements)</small>
+                                        </div>
                                     </div>
-                                    <input type="file" id="aiFileInput" accept=".csv,.pdf" class="d-none">
-                                    <button type="button" class="btn btn-sm btn-outline-info" id="chooseFileBtn">
-                                        <i class="fas fa-folder-open me-1"></i>Choose File
-                                    </button>
-                                </div>
-                                <div class="mt-2">
-                                    <small class="text-muted">Supported formats: CSV, PDF (bank statements)</small>
-                                </div>
-                            </div>
-                            
-                            <!-- PDF Extraction Options -->
-                            <div class="card mb-3">
-                                <div class="card-header bg-light">
-                                    <h6 class="mb-0"><i class="fas fa-cog me-2"></i>PDF Extraction Settings</h6>
-                                </div>
-                                <div class="card-body">
-                                    <div class="row">
-                                        <div class="col-md-6">
-                                            <label for="pdfExtractionMethod" class="form-label">Extraction Method</label>
-                                            <select class="form-select" id="pdfExtractionMethod">
-                                                <option value="camelot" selected>Camelot (Recommended for tables)</option>
-                                                <option value="pypdf">PyPDF (Fallback for text-heavy documents)</option>
-                                            </select>
-                                            <small class="form-text text-muted">
-                                                Camelot is better for tables, PyPDF for text extraction
-                                            </small>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label for="pdfPageNumbers" class="form-label">Page Numbers</label>
-                                            <input type="text" class="form-control" id="pdfPageNumbers" placeholder="e.g., 1,3,5 or leave blank for all pages">
-                                            <small class="form-text text-muted">
-                                                Specify pages to extract (comma-separated numbers)
-                                            </small>
-                                        </div>
+                                    <div class="d-flex flex-column align-items-end gap-2">
+                                        <input type="file" id="aiFileInput" accept=".csv,.pdf" class="d-none">
+                                        <button type="button" class="btn btn-sm btn-outline-info" id="chooseFileBtn">
+                                            <i class="fas fa-folder-open me-1"></i>Choose File
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pdfSettingsModal">
+                                            <i class="fas fa-sliders me-1"></i>Settings
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -380,6 +395,46 @@
             </div>
         </div>
     </div>
+
+    <!-- Analytics Tab -->
+    <div class="tab-pane fade" id="analytics" role="tabpanel">
+        <div class="row">
+            <div class="col-lg-7">
+                <div class="card">
+                    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="fas fa-message me-2"></i>Ask the data</h5>
+                        <span class="badge bg-light text-primary">Charts & Pivots</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="analyticsChatLog" class="border rounded p-3 mb-3" style="min-height: 160px; max-height: 320px; overflow-y: auto;">
+                            <div class="text-muted small">Try: "How much did I spend on vacation in 2022 and 2023?"</div>
+                        </div>
+                        <div class="input-group">
+                            <input type="text" id="analyticsPrompt" class="form-control" placeholder="Ask a question about your expenses...">
+                            <button class="btn btn-primary" id="analyticsSend"><i class="fas fa-paper-plane"></i></button>
+                            <button class="btn btn-outline-secondary" id="analyticsCancel"><i class="fas fa-times"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-5 mt-4 mt-lg-0">
+                <div class="card h-100">
+                    <div class="card-header bg-white">
+                        <h6 class="mb-0"><i class="fas fa-chart-bar me-2 text-primary"></i>Results</h6>
+                    </div>
+                    <div class="card-body">
+                        <div id="analyticsChartWrapper">
+                            <canvas id="analyticsChart" height="260"></canvas>
+                        </div>
+                        <div id="analyticsTable" class="table-responsive d-none">
+                            <table class="table table-striped mb-0" id="analyticsTableInner"></table>
+                        </div>
+                        <div id="analyticsSummary" class="text-muted small mt-3"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Invite Dashboard Modal -->
@@ -455,6 +510,8 @@
 <!-- DataTables for yearly view -->
 <script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
 <link href="https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css" rel="stylesheet">
+<!-- Chart.js for analytics -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 {% endblock %}

@@ -11,6 +11,7 @@ class DashboardManager {
         this.lastSelectionRange = null;
         this.monthlyToastShown = false;
         this.securityToastShown = false;
+        this.analyticsSessionId = null;
         this.init();
     }
 
@@ -336,15 +337,30 @@ class DashboardManager {
                     this.sendAiChatMessage();
                 }
             });
+            // Seed a friendly intro if empty
+            const chatMessages = document.getElementById('aiChatMessages');
+            if (chatMessages && chatMessages.children.length === 0) {
+                this.addAiChatMessage('assistant', 'Hello! Upload a PDF/CSV or paste data, then tell me how to clean or categorize it.');
+            }
         }
     }
     
     addAiChatMessage(role, content) {
         const chatMessages = document.getElementById('aiChatMessages');
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `chat-message ${role} mb-2`;
-        messageDiv.innerHTML = `<strong>${role === 'user' ? 'You' : 'AI Assistant'}:</strong> ${content}`;
-        chatMessages.appendChild(messageDiv);
+        if (!chatMessages) return;
+        const row = document.createElement('div');
+        row.className = `d-flex mb-2 ${role === 'user' ? 'justify-content-end' : 'justify-content-start'}`;
+        const bubble = document.createElement('div');
+        bubble.className = `d-inline-flex align-items-start gap-2 ${role === 'user' ? 'bg-primary text-white' : 'bg-light border'} rounded-pill py-1 px-3`;
+        const badge = document.createElement('span');
+        badge.className = `badge ${role === 'user' ? 'bg-light text-primary' : 'bg-secondary'}`;
+        badge.textContent = role === 'user' ? 'You' : 'AI';
+        const text = document.createElement('span');
+        text.textContent = content;
+        bubble.appendChild(badge);
+        bubble.appendChild(text);
+        row.appendChild(bubble);
+        chatMessages.appendChild(row);
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
     
@@ -637,6 +653,9 @@ class DashboardManager {
 
         // Mobile-friendly row controls for Handsontable
         this.setupMobileMonthlyActions();
+
+        // Analytics chat setup
+        this.setupAnalytics();
     }
 
     setupMobileMonthlyActions() {
@@ -731,6 +750,8 @@ class DashboardManager {
                     this.refreshYearlyData();
                 } else if (target === '#ingress') {
                     this.showSecurityToast();
+                } else if (target === '#analytics') {
+                    this.focusAnalyticsInput();
                 }
             });
         });
@@ -752,6 +773,220 @@ class DashboardManager {
         const toast = bootstrap.Toast.getOrCreateInstance(toastEl);
         toast.show();
         this.securityToastShown = true;
+    }
+
+    setupAnalytics() {
+        this.analyticsChart = null;
+        this.analyticsCtx = document.getElementById('analyticsChart');
+        this.analyticsSummary = document.getElementById('analyticsSummary');
+        this.analyticsLog = document.getElementById('analyticsChatLog');
+        this.analyticsTable = document.getElementById('analyticsTable');
+        this.analyticsTableInner = document.getElementById('analyticsTableInner');
+        this.analyticsChartWrapper = document.getElementById('analyticsChartWrapper');
+
+        const promptInput = document.getElementById('analyticsPrompt');
+        const sendBtn = document.getElementById('analyticsSend');
+        const cancelBtn = document.getElementById('analyticsCancel');
+
+        if (sendBtn && promptInput) {
+            sendBtn.addEventListener('click', () => this.handleAnalyticsPrompt());
+            promptInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.handleAnalyticsPrompt();
+                }
+            });
+        }
+
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', () => this.cancelAnalyticsSession());
+        }
+    }
+
+    focusAnalyticsInput() {
+        const promptInput = document.getElementById('analyticsPrompt');
+        if (promptInput) {
+            promptInput.focus();
+        }
+    }
+
+    appendAnalyticsMessage(role, message) {
+        if (!this.analyticsLog) return;
+        const row = document.createElement('div');
+        row.className = `d-flex mb-2 ${role === 'user' ? 'justify-content-end' : 'justify-content-start'}`;
+        const bubble = document.createElement('div');
+        bubble.className = `d-inline-flex align-items-start gap-2 ${role === 'user' ? 'bg-primary text-white' : 'bg-light border'} rounded-pill py-1 px-3`;
+        const badge = document.createElement('span');
+        badge.className = `badge ${role === 'user' ? 'bg-light text-primary' : 'bg-secondary'}`;
+        badge.textContent = role === 'user' ? 'You' : 'AI';
+        const text = document.createElement('span');
+        text.textContent = message;
+        bubble.appendChild(badge);
+        bubble.appendChild(text);
+        row.appendChild(bubble);
+        this.analyticsLog.appendChild(row);
+        this.analyticsLog.scrollTop = this.analyticsLog.scrollHeight;
+    }
+
+    clearAnalyticsChat() {
+        if (this.analyticsLog) {
+            this.analyticsLog.innerHTML = '';
+        }
+        if (this.analyticsSummary) {
+            this.analyticsSummary.textContent = '';
+        }
+        if (this.analyticsChart) {
+            this.analyticsChart.destroy();
+            this.analyticsChart = null;
+        }
+        if (this.analyticsTable) {
+            this.analyticsTable.classList.add('d-none');
+        }
+        if (this.analyticsChartWrapper) {
+            this.analyticsChartWrapper.classList.remove('d-none');
+        }
+    }
+
+    async handleAnalyticsPrompt() {
+        const promptInput = document.getElementById('analyticsPrompt');
+        const prompt = (promptInput && promptInput.value.trim()) || '';
+        if (!prompt) return;
+
+        const sendBtn = document.getElementById('analyticsSend');
+        if (sendBtn) sendBtn.disabled = true;
+        if (promptInput) promptInput.disabled = true;
+
+        this.appendAnalyticsMessage('user', prompt);
+
+        try {
+            const result = await ApiClient.analytics.query(this.dashboardId, prompt, this.analyticsSessionId);
+            if (result.session_id) {
+                this.analyticsSessionId = result.session_id;
+            }
+            this.appendAnalyticsMessage('assistant', result.summary || 'Chart ready');
+            this.renderAnalyticsChart(result);
+        } catch (error) {
+            debug.error('Analytics query failed:', error);
+            this.appendAnalyticsMessage('assistant', error.message || 'Failed to generate chart');
+        } finally {
+            if (sendBtn) sendBtn.disabled = false;
+            if (promptInput) {
+                promptInput.disabled = false;
+                promptInput.value = '';
+                promptInput.focus();
+            }
+        }
+    }
+
+    renderAnalyticsChart(payload) {
+        if (!window.Chart) return;
+        if (this.analyticsChart) {
+            this.analyticsChart.destroy();
+            this.analyticsChart = null;
+        }
+
+        const { chart_type, labels, data, summary, rows, datasets } = payload;
+
+        // Toggle views
+        if (this.analyticsChartWrapper) {
+            this.analyticsChartWrapper.classList.toggle('d-none', chart_type === 'table');
+        }
+        if (this.analyticsTable) {
+            this.analyticsTable.classList.toggle('d-none', chart_type !== 'table');
+        }
+
+        if (chart_type === 'table' && this.analyticsTableInner) {
+            const headers = ['Label', 'Total'];
+            let html = `<thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>`;
+            (rows || []).forEach(r => {
+                html += `<tr><td>${r.label}</td><td>${Utils.formatCurrency(r.value)}</td></tr>`;
+            });
+            html += '</tbody>';
+            this.analyticsTableInner.innerHTML = html;
+            if (this.analyticsSummary) {
+                this.analyticsSummary.textContent = summary || '';
+            }
+            return;
+        }
+
+        if (!this.analyticsCtx) return;
+
+        const colors = [
+            '#4154f1', '#2db6fa', '#ff771d', '#3f51b5', '#00bcd4',
+            '#4caf50', '#f44336', '#9c27b0', '#ff9800', '#009688'
+        ];
+
+        let finalDatasets = datasets;
+        if (!finalDatasets || finalDatasets.length === 0) {
+            finalDatasets = [{
+                label: 'Amount',
+                data: data || [],
+                backgroundColor: chart_type === 'pie' ? colors : colors[0],
+                borderColor: chart_type === 'pie' ? '#fff' : colors[0],
+                borderWidth: chart_type === 'pie' ? 1 : 2,
+                tension: 0.3,
+                fill: chart_type === 'pie'
+            }];
+        } else {
+            // Assign colors if multiple series
+            finalDatasets = finalDatasets.map((ds, idx) => ({
+                ...ds,
+                backgroundColor: chart_type === 'pie'
+                    ? colors
+                    : colors[idx % colors.length],
+                borderColor: chart_type === 'pie'
+                    ? '#fff'
+                    : colors[idx % colors.length],
+                borderWidth: chart_type === 'pie' ? 1 : 2,
+                tension: 0.3,
+                fill: chart_type === 'pie'
+            }));
+        }
+
+        this.analyticsChart = new Chart(this.analyticsCtx, {
+            type: chart_type === 'pie' ? 'pie' : 'line',
+            data: {
+                labels: labels || [],
+                datasets: finalDatasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true },
+                    tooltip: { mode: 'index', intersect: false }
+                },
+                scales: chart_type === 'pie' ? {} : {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: (val) => Utils.formatCurrency(val)
+                        }
+                    }
+                }
+            }
+        });
+
+        if (this.analyticsSummary) {
+            this.analyticsSummary.textContent = summary || '';
+        }
+    }
+
+    async cancelAnalyticsSession() {
+        if (!this.analyticsSessionId) {
+            this.appendAnalyticsMessage('assistant', 'No active analytics session to cancel.');
+            this.clearAnalyticsChat();
+            return;
+        }
+        try {
+            await ApiClient.analytics.cancel(this.dashboardId, this.analyticsSessionId);
+            this.appendAnalyticsMessage('assistant', 'Analytics context cleared.');
+            this.analyticsSessionId = null;
+            this.clearAnalyticsChat();
+        } catch (error) {
+            debug.error('Failed to cancel analytics session:', error);
+            this.appendAnalyticsMessage('assistant', 'Could not clear context. Try again.');
+        }
     }
 
     getSelectedMonthFromDropdown() {

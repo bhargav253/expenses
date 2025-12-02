@@ -186,6 +186,16 @@ const ApiClient = {
             method: 'POST',
             body: { pdf_data: base64Pdf, filename }
         })
+    },
+
+    analytics: {
+        query: (dashboardId, prompt, sessionId) => ApiClient.request(`/api/dashboard/${dashboardId}/analytics/query`, {
+            method: 'POST',
+            body: { prompt, session_id: sessionId }
+        }),
+        cancel: (dashboardId, sessionId) => ApiClient.request(`/api/dashboard/${dashboardId}/analytics/session/${sessionId}`, {
+            method: 'DELETE'
+        })
     }
 };
 

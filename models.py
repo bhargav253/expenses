@@ -187,6 +187,39 @@ class DashboardInvitation(db.Model):
     invited_user = db.relationship('User', foreign_keys=[invited_user_id])
     invited_by_user = db.relationship('User', foreign_keys=[invited_by_user_id])
 
+
+class AnalyticsSession(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.String(255), unique=True, nullable=False)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    conversation_history = db.Column(db.Text)  # JSON of [{role, content, summary, timestamp}]
+    status = db.Column(db.String(50), default='active')  # active, cancelled, expired
+    expires_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dashboard = db.relationship('Dashboard')
+    user = db.relationship('User')
+
+    def get_history(self):
+        if self.conversation_history:
+            try:
+                return json.loads(self.conversation_history)
+            except Exception:
+                return []
+        return []
+
+    def add_entry(self, role, content, summary=None):
+        history = self.get_history()
+        history.append({
+            'role': role,
+            'content': content,
+            'summary': summary,
+            'timestamp': datetime.utcnow().isoformat()
+        })
+        self.conversation_history = json.dumps(history)
+
 class UserDashboardSettings(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
