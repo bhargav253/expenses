@@ -1,15 +1,22 @@
 {% extends "base.html" %}
 
-{% block title %}Home - Expense Tracker{% endblock %}
+{% block title %}Home - Finance Workspace{% endblock %}
 
 {% block content %}
 <section class="hero-section mb-5">
     <div class="row justify-content-center text-center">
         <div class="col-lg-8">
+            {% if session.user %}
+            <h1 class="display-5 fw-bold mt-1">Choose your workspace</h1>
+            <p class="lead mt-3 mb-4">
+                Expenses stay inside expense dashboards. Investing has its own workspace entry point.
+            </p>
+            {% else %}
             <h1 class="display-5 fw-bold mt-1">Track every bank account in one calm workspace</h1>
             <p class="lead mt-3 mb-4">
                 Pull expenses from different statements, clean them with AI, and keep dashboards in sync.
             </p>
+            {% endif %}
             
             {% if not session.user %}
             <div class="hero-actions d-flex flex-wrap gap-3 justify-content-center">
@@ -24,16 +31,62 @@
                 </a>
             </div>
             {% else %}
-            <div class="hero-actions d-flex flex-wrap gap-3 justify-content-center">
-                <a href="{{ url_for('dashboard_list') }}" class="btn btn-primary">
-                    <i class="fas fa-table-columns me-2"></i>Open dashboards
+            <div class="workspace-split">
+                <a href="{{ url_for('dashboard_list') }}" class="workspace-card workspace-card-expense">
+                    <div class="workspace-card-top">
+                        <span class="workspace-pill">Expense</span>
+                        <span class="workspace-icon"><i class="fas fa-wallet"></i></span>
+                    </div>
+                    <div class="workspace-card-body">
+                        <h4 class="fw-bold">Expense Dashboards</h4>
+                        <p class="text-muted mb-4">Bank statements, monthly editing, yearly rollups, category pivots, and the new expense analytics agent.</p>
+                        <div class="workspace-points">
+                            <span>Shared dashboards</span>
+                            <span>AI cleanup</span>
+                            <span>Trend analysis</span>
+                        </div>
+                    </div>
+                    <div class="workspace-card-footer">
+                        <span class="workspace-cta">Open Expense Dashboards</span>
+                        <i class="fas fa-arrow-right"></i>
+                    </div>
                 </a>
-                <a href="{{ url_for('settings') }}" class="btn btn-outline-primary">
+
+                <a href="{{ url_for('investing_list') }}" class="workspace-card workspace-card-investing">
+                    <div class="workspace-card-top">
+                        <span class="workspace-pill">Investment</span>
+                        <span class="workspace-icon"><i class="fas fa-chart-line"></i></span>
+                    </div>
+                    <div class="workspace-card-body">
+                        <h4 class="fw-bold">Investment Workspace</h4>
+                        <p class="text-muted mb-4">Watchlists, trade ideas, cached snapshots, and the growing research layer for market analysis.</p>
+                        <div class="workspace-points">
+                            <span>Watchlists</span>
+                            <span>Trade ideas</span>
+                            <span>Market snapshots</span>
+                        </div>
+                    </div>
+                    <div class="workspace-card-footer">
+                        <span class="workspace-cta">Open Investing</span>
+                        <i class="fas fa-arrow-right"></i>
+                    </div>
+                </a>
+            </div>
+
+            <div class="mt-4 d-flex flex-wrap gap-3 justify-content-center">
+                <a href="{{ url_for('settings', next=request.path) }}" class="btn btn-outline-secondary">
                     <i class="fas fa-sliders me-2"></i>Settings
                 </a>
             </div>
+            {% if dashboards %}
+            <div class="hero-metrics mt-4 d-flex flex-wrap gap-3 justify-content-center">
+                <span class="hero-metric"><i class="fas fa-layer-group"></i>{{ dashboards|length }} shared workspace{% if dashboards|length != 1 %}s{% endif %}</span>
+                <span class="hero-metric"><i class="fas fa-users"></i>Expense and investment views stay paired</span>
+            </div>
+            {% endif %}
             {% endif %}
 
+            {% if not session.user %}
             <div class="row g-3 mt-4 justify-content-center">
                 <div class="col-md-4">
                     <div class="feature-card h-100 text-center">
@@ -54,10 +107,12 @@
                     </div>
                 </div>
             </div>
+            {% endif %}
         </div>
     </div>
 </section>
 
+{% if not session.user %}
 <section id="features" class="mt-4">
     <div class="section-heading text-center">
         <div class="eyebrow">Capabilities</div>
@@ -82,8 +137,8 @@
         <div class="col-md-4">
             <div class="feature-card h-100">
                 <span class="feature-icon"><i class="fas fa-users"></i></span>
-                <h5 class="fw-bold">Collaborative workspaces</h5>
-                <p class="text-muted mb-0">Invite teammates, manage roles, and stay synced with dashboards that mirror modern SaaS patterns.</p>
+                        <h5 class="fw-bold">Collaborative workspaces</h5>
+                        <p class="text-muted mb-0">Invite teammates, manage roles, and keep expense dashboards and investment workspaces aligned.</p>
             </div>
         </div>
         <div class="col-md-4">
@@ -109,4 +164,5 @@
         </div>
     </div>
 </section>
+{% endif %}
 {% endblock %}

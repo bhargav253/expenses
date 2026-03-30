@@ -1,18 +1,21 @@
 {% extends "base.html" %}
 
-{% block title %}{{ dashboard.name }} - Expense Tracker{% endblock %}
+{% block title %}{{ dashboard.name }} - Expense Dashboard{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <h2><i class="fas fa-tachometer-alt me-2"></i>{{ dashboard.name }}</h2>
+        <h2><i class="fas fa-wallet me-2"></i>{{ dashboard.name }}</h2>
         {% if dashboard.description %}
         <p class="text-muted mb-0">{{ dashboard.description }}</p>
         {% endif %}
     </div>
     <div>
         <a href="{{ url_for('dashboard_list') }}" class="btn btn-outline-secondary me-2">
-            <i class="fas fa-arrow-left me-1"></i>Back to Dashboards
+            <i class="fas fa-arrow-left me-1"></i>Back to Expense Dashboards
+        </a>
+        <a href="{{ url_for('investing_workspace', dashboard_id=dashboard.id) }}" class="btn btn-outline-primary me-2">
+            <i class="fas fa-chart-line me-1"></i>Investment Workspace
         </a>
         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#shareDashboardModal">
             <i class="fas fa-user-plus me-1"></i>Invite
@@ -258,7 +261,7 @@
                 
                 <div class="card mt-4">
                     <div class="card-header bg-info text-white">
-                        <h5 class="mb-0"><i class="fas fa-users me-2"></i>Dashboard Members</h5>
+                        <h5 class="mb-0"><i class="fas fa-users me-2"></i>Expense Dashboard Members</h5>
                     </div>
                     <div class="card-body">
                         <div class="list-group list-group-flush">
@@ -300,7 +303,7 @@
                                     <i class="fas fa-unlock me-1"></i>Public Mode
                                 </label>
                                 <small class="form-text text-muted d-block">
-                                    All dashboard members can edit any expense entries
+                                    All expense dashboard members can edit any expense entries
                                 </small>
                             </div>
                         </div>
@@ -430,6 +433,9 @@
                             <table class="table table-striped mb-0" id="analyticsTableInner"></table>
                         </div>
                         <div id="analyticsSummary" class="text-muted small mt-3"></div>
+                        <div id="analyticsFindings" class="mt-3 d-none"></div>
+                        <div id="analyticsWarnings" class="mt-3 d-none"></div>
+                        <div id="analyticsTrace" class="text-muted small mt-3 d-none"></div>
                     </div>
                 </div>
             </div>
@@ -442,11 +448,11 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Invite to Dashboard</h5>
+                <h5 class="modal-title">Invite to Expense Dashboard</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p class="text-muted">Invite teammates by email to collaborate on this dashboard.</p>
+                <p class="text-muted">Invite teammates by email to collaborate on this expense dashboard.</p>
                 <div class="mb-3">
                     <label for="shareEmail" class="form-label">Email Address</label>
                     <input type="email" class="form-control" id="shareEmail" placeholder="Enter email address">

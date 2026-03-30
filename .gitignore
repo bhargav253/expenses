@@ -1,6 +1,7 @@
 **/__pycache__/
 sample/
 logs/
+next_plan/
 .env
 env.example
 .env.example

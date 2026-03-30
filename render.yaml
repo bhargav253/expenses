@@ -28,3 +28,30 @@ services:
         value: "INFO"
       - key: LOG_FORMAT
         value: "json"
+      - key: FINNHUB_API_KEY
+        value: your-finnhub-api-key-here
+  - type: worker
+    name: expense-ticker-worker
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python ticker_worker.py
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        value: your-google-client-id-here
+      - key: GOOGLE_CLIENT_SECRET
+        value: your-google-client-secret-here
+      - key: AI_MOCK_MODE
+        value: "false"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: LOG_FORMAT
+        value: "json"
+      - key: FINNHUB_API_KEY
+        value: your-finnhub-api-key-here
+      - key: FINNHUB_RATE_LIMIT_PER_MINUTE
+        value: "45"
+      - key: TICKER_WORKER_SLEEP_SECONDS
+        value: "10"

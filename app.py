@@ -9,6 +9,8 @@ from flask_wtf.csrf import CSRFError, generate_csrf
 import os
 from datetime import datetime, timedelta
 import json
+from pathlib import Path
+import threading
 import requests
 import uuid
 import logging
@@ -21,7 +23,12 @@ import html
 from logging.handlers import RotatingFileHandler
 from security_utils import decrypt_str, encrypt_str, encryption_enabled
 from dotenv import load_dotenv
-from sqlalchemy import text
+from sqlalchemy import func, inspect, text
+from sqlalchemy.exc import OperationalError
+
+from expense_agent import run_expense_analytics_agent
+from market_data import MarketDataError, MarketDataService, TradingViewScreenerError, TradingViewWatchlistScreenerService, normalize_symbol
+from ticker_ingestion import enqueue_asset_refresh
 
 # Security Configuration
 # ======================
@@ -197,6 +204,8 @@ def setup_logging():
 # Initialize logging
 setup_logging()
 logger = logging.getLogger(__name__)
+MARKET_DATA_SERVICE = None
+TRADINGVIEW_SCREENER_SERVICE = None
 
 
 @app.after_request
@@ -226,6 +235,1414 @@ def handle_csrf_error(e):
 @app.context_processor
 def inject_security_tokens():
     return {'csrf_token': generate_csrf}
+
+
+def get_market_data_service():
+    global MARKET_DATA_SERVICE
+    if MARKET_DATA_SERVICE is None:
+        MARKET_DATA_SERVICE = MarketDataService()
+    return MARKET_DATA_SERVICE
+
+
+def get_tradingview_screener_service():
+    global TRADINGVIEW_SCREENER_SERVICE
+    if TRADINGVIEW_SCREENER_SERVICE is None:
+        TRADINGVIEW_SCREENER_SERVICE = TradingViewWatchlistScreenerService()
+    return TRADINGVIEW_SCREENER_SERVICE
+
+
+DEFAULT_SCREENER_WATCHLIST_NAME = 'Default'
+DEFAULT_SCREENER_WATCHLIST_DESCRIPTION = 'Broad stock universe used by the faceted screener.'
+DEFAULT_SAVED_SCREENER_NAME = 'Default Stock Screener'
+DEFAULT_SCREENER_MAX_CRITERIA = 5
+VISIBLE_REFRESH_SYNC_BATCH_SIZE = 10
+DEFAULT_WATCHLIST_FILE = Path(app.root_path) / 'next_plan' / 'screener' / 'default_watchlist.txt'
+DEFAULT_SCREENER_SYMBOLS = None
+BACKGROUND_WATCHLIST_REFRESH_JOBS = {}
+BACKGROUND_VISIBLE_REFRESH_JOBS = {}
+BACKGROUND_WATCHLIST_REFRESH_LOCK = threading.Lock()
+
+
+def get_dashboard_member_or_none(dashboard_id, user_id):
+    return DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id,
+        user_id=user_id
+    ).first()
+
+
+def load_default_screener_symbols():
+    global DEFAULT_SCREENER_SYMBOLS
+    if DEFAULT_SCREENER_SYMBOLS is not None:
+        return DEFAULT_SCREENER_SYMBOLS
+
+    symbols = []
+    seen = set()
+    if DEFAULT_WATCHLIST_FILE.exists():
+        for line in DEFAULT_WATCHLIST_FILE.read_text(encoding='utf-8').splitlines():
+            symbol = (line or '').strip().upper()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            symbols.append(symbol)
+
+    DEFAULT_SCREENER_SYMBOLS = symbols
+    return DEFAULT_SCREENER_SYMBOLS
+
+
+def is_default_screener_watchlist(watchlist):
+    return bool(watchlist and watchlist.name == DEFAULT_SCREENER_WATCHLIST_NAME)
+
+
+def ensure_default_screener_watchlist(dashboard_id, created_by):
+    watchlist = Watchlist.query.filter_by(
+        dashboard_id=dashboard_id,
+        name=DEFAULT_SCREENER_WATCHLIST_NAME
+    ).first()
+    created = False
+    if watchlist is None:
+        watchlist = Watchlist(
+            dashboard_id=dashboard_id,
+            created_by=created_by,
+            name=DEFAULT_SCREENER_WATCHLIST_NAME,
+            description=DEFAULT_SCREENER_WATCHLIST_DESCRIPTION
+        )
+        db.session.add(watchlist)
+        db.session.flush()
+        created = True
+
+    symbols = load_default_screener_symbols()
+    if not symbols:
+        if created:
+            db.session.commit()
+        return watchlist
+
+    existing_assets = Asset.query.filter(Asset.symbol.in_(symbols)).all()
+    asset_map = {asset.symbol: asset for asset in existing_assets}
+    missing_symbols = [symbol for symbol in symbols if symbol not in asset_map]
+    if missing_symbols:
+        db.session.add_all([
+            Asset(symbol=symbol, asset_type='equity', added_source='seed', status='active')
+            for symbol in missing_symbols
+        ])
+        db.session.flush()
+        existing_assets = Asset.query.filter(Asset.symbol.in_(symbols)).all()
+        asset_map = {asset.symbol: asset for asset in existing_assets}
+        created = True
+
+    for asset in asset_map.values():
+        enqueue_asset_refresh(asset, include_backfill=False)
+        created = True
+
+    existing_asset_ids = {
+        row.asset_id
+        for row in WatchlistItem.query.filter_by(watchlist_id=watchlist.id).all()
+    }
+    new_items = []
+    for symbol in symbols:
+        asset = asset_map.get(symbol)
+        if not asset or asset.id in existing_asset_ids:
+            continue
+        new_items.append(
+            WatchlistItem(
+                watchlist_id=watchlist.id,
+                asset_id=asset.id,
+                added_by=created_by,
+                position_status='universe'
+            )
+        )
+    if new_items:
+        db.session.add_all(new_items)
+        created = True
+
+    watchlist_id = watchlist.id
+    if created:
+        db.session.commit()
+        return Watchlist.query.get(watchlist_id)
+    return watchlist
+
+
+def ensure_default_screener_definition(dashboard_id, created_by, watchlist_id):
+    screener = ScreenerDefinition.query.filter_by(
+        dashboard_id=dashboard_id,
+        name=DEFAULT_SAVED_SCREENER_NAME,
+        is_archived=False
+    ).first()
+    if screener:
+        return screener
+
+    screener = ScreenerDefinition(
+        dashboard_id=dashboard_id,
+        created_by=created_by,
+        name=DEFAULT_SAVED_SCREENER_NAME,
+        description='Faceted stock screener over the default universe.',
+        filters_json=json.dumps({
+            'watchlist_id': watchlist_id,
+            'criteria': []
+        }),
+        sort_json=json.dumps({
+            'by': 'market_cap',
+            'direction': 'desc'
+        })
+    )
+    db.session.add(screener)
+    screener_id = screener.id
+    if screener_id is None:
+        db.session.flush()
+        screener_id = screener.id
+    db.session.commit()
+    return ScreenerDefinition.query.get(screener_id)
+
+
+def get_or_create_dashboard_settings(user_id, dashboard_id):
+    ensure_user_dashboard_settings_schema()
+    settings = UserDashboardSettings.query.filter_by(
+        user_id=user_id,
+        dashboard_id=dashboard_id
+    ).first()
+    if settings:
+        return settings
+
+    settings = UserDashboardSettings(
+        user_id=user_id,
+        dashboard_id=dashboard_id,
+        edit_mode='private'
+    )
+    db.session.add(settings)
+    db.session.commit()
+    return settings
+
+
+def ensure_user_dashboard_settings_schema():
+    inspector_rows = db.session.execute(text("PRAGMA table_info(user_dashboard_settings)")).fetchall()
+    if not inspector_rows:
+        return
+
+    existing_columns = {row[1] for row in inspector_rows}
+    if 'selected_investing_watchlist_id' not in existing_columns:
+        db.session.execute(text("ALTER TABLE user_dashboard_settings ADD COLUMN selected_investing_watchlist_id INTEGER"))
+        db.session.commit()
+        existing_columns.add('selected_investing_watchlist_id')
+    if 'selected_investing_screener_id' not in existing_columns:
+        db.session.execute(text("ALTER TABLE user_dashboard_settings ADD COLUMN selected_investing_screener_id INTEGER"))
+        db.session.commit()
+
+
+def resolve_selected_watchlist(dashboard_id, user_id, default_watchlist):
+    settings = get_or_create_dashboard_settings(user_id, dashboard_id)
+    selected_watchlist = None
+    if settings.selected_investing_watchlist_id:
+        selected_watchlist = Watchlist.query.filter_by(
+            id=settings.selected_investing_watchlist_id,
+            dashboard_id=dashboard_id
+        ).first()
+
+    if selected_watchlist is None:
+        selected_watchlist = default_watchlist
+
+    return settings, selected_watchlist
+
+
+def resolve_selected_screener(dashboard_id, user_id, default_screener):
+    settings = get_or_create_dashboard_settings(user_id, dashboard_id)
+    selected_screener = None
+    if settings.selected_investing_screener_id:
+        selected_screener = ScreenerDefinition.query.filter_by(
+            id=settings.selected_investing_screener_id,
+            dashboard_id=dashboard_id,
+            is_archived=False
+        ).first()
+
+    if selected_screener is None:
+        selected_screener = default_screener
+
+    return settings, selected_screener
+
+
+def _serialize_legacy_market_snapshot(snapshot):
+    if snapshot is None:
+        return None
+    return {
+        'price': snapshot.price,
+        'change_percent': snapshot.change_percent,
+        'market_cap': snapshot.market_cap,
+        'volume': snapshot.volume,
+        'fetched_at': snapshot.fetched_at.isoformat() if snapshot.fetched_at else None
+    }
+
+
+def get_latest_ticker_snapshot_for_asset(asset):
+    if asset is None:
+        return None
+    if asset.ticker_snapshot_latest:
+        snapshot = asset.ticker_snapshot_latest
+        return {
+            'price': snapshot.last_price,
+            'change_percent': snapshot.today_change_percent,
+            'price_performance_5d': snapshot.price_performance_5d,
+            'market_cap': snapshot.market_cap,
+            'volume': snapshot.volume,
+            'fetched_at': snapshot.quote_as_of.isoformat() if snapshot.quote_as_of else snapshot.updated_at.isoformat() if snapshot.updated_at else None
+        }
+    if asset.market_snapshots:
+        latest_legacy_snapshot = sorted(
+            asset.market_snapshots,
+            key=lambda snapshot: (snapshot.snapshot_date, snapshot.fetched_at),
+            reverse=True
+        )[0]
+        return _serialize_legacy_market_snapshot(latest_legacy_snapshot)
+    return None
+
+
+def get_watchlist_price_performance_map(asset_ids, window):
+    if not asset_ids or window < 2:
+        return {}
+
+    ranked_bars = (
+        db.session.query(
+            TickerDailyBar.asset_id.label('asset_id'),
+            TickerDailyBar.close.label('close_price'),
+            func.row_number().over(
+                partition_by=TickerDailyBar.asset_id,
+                order_by=TickerDailyBar.bar_date.desc()
+            ).label('row_num')
+        )
+        .filter(TickerDailyBar.asset_id.in_(asset_ids))
+        .subquery()
+    )
+
+    rows = (
+        db.session.query(
+            ranked_bars.c.asset_id,
+            ranked_bars.c.close_price,
+            ranked_bars.c.row_num
+        )
+        .filter(ranked_bars.c.row_num.in_([1, window]))
+        .all()
+    )
+
+    performance_map = {}
+    grouped_rows = {}
+    for asset_id, close_price, row_num in rows:
+        grouped_rows.setdefault(asset_id, {})[row_num] = close_price
+
+    for asset_id, close_points in grouped_rows.items():
+        current_price = close_points.get(1)
+        prior_price = close_points.get(window)
+        if current_price in (None, 0) or prior_price in (None, 0):
+            continue
+        performance_map[asset_id] = ((current_price - prior_price) / prior_price) * 100.0
+
+    return performance_map
+
+
+def serialize_watchlist_item(item, performance_12d_map=None):
+    latest_snapshot = get_latest_ticker_snapshot_for_asset(item.asset) if item.asset else None
+    asset_symbol = item.asset.symbol if item.asset else None
+    asset_name = item.asset.name if item.asset and item.asset.name else asset_symbol
+    performance_12d = performance_12d_map.get(item.asset_id) if performance_12d_map else None
+
+    if latest_snapshot is not None:
+        latest_snapshot = {**latest_snapshot, 'price_performance_12d': performance_12d}
+
+    return {
+        'id': item.id,
+        'symbol': asset_symbol,
+        'asset_name': asset_name,
+        'position_status': item.position_status,
+        'thesis_summary': item.thesis_summary,
+        'target_price': item.target_price,
+        'invalidation_price': item.invalidation_price,
+        'snapshot': latest_snapshot
+    }
+
+
+def serialize_watchlist(watchlist):
+    asset_ids = [item.asset_id for item in watchlist.items if item.asset_id]
+    performance_12d_map = get_watchlist_price_performance_map(asset_ids, 12)
+    items = [serialize_watchlist_item(item, performance_12d_map=performance_12d_map) for item in watchlist.items]
+    items.sort(
+        key=lambda item: (
+            item['snapshot']['market_cap']
+            if item.get('snapshot') and item['snapshot'].get('market_cap') is not None
+            else -1
+        ),
+        reverse=True,
+    )
+    return {
+        'id': watchlist.id,
+        'name': watchlist.name,
+        'description': watchlist.description,
+        'is_archived': watchlist.is_archived,
+        'items': items
+    }
+
+
+def get_watchlist_cache_coverage(watchlist):
+    item_asset_ids = [item.asset_id for item in watchlist.items if item.asset_id]
+    total_items = len(item_asset_ids)
+    if not item_asset_ids:
+        return {'cached_count': 0, 'total_items': 0, 'missing_count': 0}
+
+    cached_rows = (
+        db.session.query(TickerSnapshotLatest.asset_id)
+        .filter(TickerSnapshotLatest.asset_id.in_(item_asset_ids))
+        .distinct()
+        .all()
+    )
+    cached_asset_ids = {row[0] for row in cached_rows}
+    cached_count = sum(1 for asset_id in item_asset_ids if asset_id in cached_asset_ids)
+    return {
+        'cached_count': cached_count,
+        'total_items': total_items,
+        'missing_count': total_items - cached_count
+    }
+
+
+def get_watchlist_priority_refresh_status(watchlist, item_ids=None):
+    if watchlist is None:
+        return {
+            'is_running': False,
+            'pending_count': 0,
+            'queued_count': 0,
+            'completed_count': 0,
+            'total_count': 0,
+        }
+
+    selected_item_ids = set(item_ids or [])
+    items = [
+        item for item in watchlist.items
+        if not selected_item_ids or item.id in selected_item_ids
+    ]
+    asset_ids = [item.asset_id for item in items if item.asset_id]
+    if not asset_ids:
+        return {
+            'is_running': False,
+            'pending_count': 0,
+            'queued_count': 0,
+            'completed_count': 0,
+            'total_count': 0,
+        }
+
+    fetch_states = TickerFetchState.query.filter(TickerFetchState.asset_id.in_(asset_ids)).all()
+    state_map = {state.asset_id: state for state in fetch_states}
+    queued_count = sum(1 for asset_id in asset_ids if state_map.get(asset_id) and state_map[asset_id].priority_requested_at)
+    pending_count = sum(
+        1 for asset_id in asset_ids
+        if state_map.get(asset_id) and (
+            state_map[asset_id].is_intraday_pending
+            or state_map[asset_id].is_fundamentals_pending
+            or state_map[asset_id].is_backfill_pending
+        )
+    )
+    total_count = len(asset_ids)
+    return {
+        'is_running': queued_count > 0,
+        'pending_count': pending_count,
+        'queued_count': queued_count,
+        'completed_count': max(total_count - pending_count, 0),
+        'total_count': total_count,
+    }
+
+
+def get_asset_priority_refresh_status(asset):
+    if asset is None:
+        return {
+            'is_running': False,
+            'has_error': False,
+            'error': None,
+            'symbol': None,
+            'snapshot': None,
+        }
+
+    fetch_state = asset.ticker_fetch_state
+    latest_snapshot = get_latest_ticker_snapshot_for_asset(asset)
+    error_message = fetch_state.last_error_message if fetch_state and fetch_state.last_error_message else None
+    return {
+        'is_running': bool(fetch_state and fetch_state.priority_requested_at),
+        'has_error': bool(error_message),
+        'error': error_message,
+        'symbol': asset.symbol,
+        'snapshot': latest_snapshot,
+        'last_success_at': fetch_state.last_success_at.isoformat() if fetch_state and fetch_state.last_success_at else None,
+    }
+
+
+def _watchlist_refresh_job_key(dashboard_id, user_id, watchlist_id):
+    return f'{dashboard_id}:{user_id}:{watchlist_id}'
+
+
+def get_watchlist_refresh_job(dashboard_id, user_id, watchlist_id):
+    with BACKGROUND_WATCHLIST_REFRESH_LOCK:
+        return BACKGROUND_WATCHLIST_REFRESH_JOBS.get(_watchlist_refresh_job_key(dashboard_id, user_id, watchlist_id))
+
+
+def set_watchlist_refresh_job(dashboard_id, user_id, watchlist_id, payload):
+    with BACKGROUND_WATCHLIST_REFRESH_LOCK:
+        BACKGROUND_WATCHLIST_REFRESH_JOBS[_watchlist_refresh_job_key(dashboard_id, user_id, watchlist_id)] = payload
+
+
+def update_watchlist_refresh_job(dashboard_id, user_id, watchlist_id, **updates):
+    with BACKGROUND_WATCHLIST_REFRESH_LOCK:
+        key = _watchlist_refresh_job_key(dashboard_id, user_id, watchlist_id)
+        job = BACKGROUND_WATCHLIST_REFRESH_JOBS.get(key, {}).copy()
+        job.update(updates)
+        BACKGROUND_WATCHLIST_REFRESH_JOBS[key] = job
+        return job
+
+
+def get_visible_refresh_job(dashboard_id, user_id, watchlist_id):
+    with BACKGROUND_WATCHLIST_REFRESH_LOCK:
+        return BACKGROUND_VISIBLE_REFRESH_JOBS.get(_watchlist_refresh_job_key(dashboard_id, user_id, watchlist_id))
+
+
+def set_visible_refresh_job(dashboard_id, user_id, watchlist_id, payload):
+    with BACKGROUND_WATCHLIST_REFRESH_LOCK:
+        BACKGROUND_VISIBLE_REFRESH_JOBS[_watchlist_refresh_job_key(dashboard_id, user_id, watchlist_id)] = payload
+
+
+def update_visible_refresh_job(dashboard_id, user_id, watchlist_id, **updates):
+    with BACKGROUND_WATCHLIST_REFRESH_LOCK:
+        key = _watchlist_refresh_job_key(dashboard_id, user_id, watchlist_id)
+        job = BACKGROUND_VISIBLE_REFRESH_JOBS.get(key, {}).copy()
+        job.update(updates)
+        BACKGROUND_VISIBLE_REFRESH_JOBS[key] = job
+        return job
+
+
+def clear_visible_refresh_job(dashboard_id, user_id, watchlist_id):
+    with BACKGROUND_WATCHLIST_REFRESH_LOCK:
+        BACKGROUND_VISIBLE_REFRESH_JOBS.pop(_watchlist_refresh_job_key(dashboard_id, user_id, watchlist_id), None)
+
+
+def run_background_watchlist_cache_refresh(dashboard_id, user_id, watchlist_id):
+    with app.app_context():
+        watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+        if not watchlist:
+            update_watchlist_refresh_job(
+                dashboard_id,
+                user_id,
+                watchlist_id,
+                is_running=False,
+                completed_at=datetime.utcnow().isoformat(),
+                error='Watchlist not found'
+            )
+            return
+
+        coverage = get_watchlist_cache_coverage(watchlist)
+        cached_asset_ids = {
+            row[0] for row in (
+                db.session.query(MarketSnapshot.asset_id)
+                .filter(MarketSnapshot.asset_id.in_([item.asset_id for item in watchlist.items if item.asset_id]))
+                .distinct()
+                .all()
+            )
+        }
+        items_to_refresh = [item for item in watchlist.items if item.asset_id and item.asset_id not in cached_asset_ids]
+        total_to_refresh = len(items_to_refresh)
+        update_watchlist_refresh_job(
+            dashboard_id,
+            user_id,
+            watchlist_id,
+            is_running=True,
+            total_to_refresh=total_to_refresh,
+            processed_count=0,
+            refreshed_count=0,
+            failed_count=0,
+            cached_count=coverage['cached_count'],
+            total_items=coverage['total_items'],
+            started_at=datetime.utcnow().isoformat(),
+            completed_at=None,
+            error=None
+        )
+
+        service = MarketDataService()
+        refreshed_count = 0
+        failed_count = 0
+        processed_count = 0
+        cached_count = coverage['cached_count']
+        for item in items_to_refresh:
+            try:
+                service.refresh_quote_snapshot(item.asset.symbol)
+                service.refresh_fundamental_snapshot(item.asset.symbol)
+                refreshed_count += 1
+                cached_count += 1
+            except Exception:
+                db.session.rollback()
+                failed_count += 1
+            processed_count += 1
+            update_watchlist_refresh_job(
+                dashboard_id,
+                user_id,
+                watchlist_id,
+                is_running=True,
+                processed_count=processed_count,
+                refreshed_count=refreshed_count,
+                failed_count=failed_count,
+                cached_count=cached_count,
+                total_items=coverage['total_items']
+            )
+
+        update_watchlist_refresh_job(
+            dashboard_id,
+            user_id,
+            watchlist_id,
+            is_running=False,
+            processed_count=processed_count,
+            refreshed_count=refreshed_count,
+            failed_count=failed_count,
+            cached_count=cached_count,
+            total_items=coverage['total_items'],
+            completed_at=datetime.utcnow().isoformat()
+        )
+
+
+def run_background_visible_watchlist_refresh(dashboard_id, user_id, watchlist_id, item_ids):
+    with app.app_context():
+        watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+        if not watchlist:
+            update_visible_refresh_job(
+                dashboard_id,
+                user_id,
+                watchlist_id,
+                is_running=False,
+                error='Watchlist not found',
+                completed_at=datetime.utcnow().isoformat()
+            )
+            return
+
+        target_items = [item for item in watchlist.items if item.id in set(item_ids)]
+        service = MarketDataService()
+        processed_count = 0
+        refreshed_count = 0
+        failed_count = 0
+        total_count = len(target_items)
+        update_visible_refresh_job(
+            dashboard_id,
+            user_id,
+            watchlist_id,
+            is_running=True,
+            total_count=total_count,
+            pending_count=total_count,
+            processed_count=0,
+            refreshed_count=0,
+            failed_count=0,
+            started_at=datetime.utcnow().isoformat(),
+            completed_at=None,
+            error=None
+        )
+
+        for item in target_items:
+            try:
+                service.refresh_quote_snapshot(item.asset.symbol)
+                service.refresh_fundamental_snapshot(item.asset.symbol)
+                refreshed_count += 1
+            except Exception:
+                db.session.rollback()
+                failed_count += 1
+            processed_count += 1
+            update_visible_refresh_job(
+                dashboard_id,
+                user_id,
+                watchlist_id,
+                is_running=True,
+                total_count=total_count,
+                pending_count=max(total_count - processed_count, 0),
+                processed_count=processed_count,
+                refreshed_count=refreshed_count,
+                failed_count=failed_count
+            )
+
+        update_visible_refresh_job(
+            dashboard_id,
+            user_id,
+            watchlist_id,
+            is_running=False,
+            total_count=total_count,
+            pending_count=0,
+            processed_count=processed_count,
+            refreshed_count=refreshed_count,
+            failed_count=failed_count,
+            completed_at=datetime.utcnow().isoformat()
+        )
+
+
+def serialize_trade_idea(idea):
+    return {
+        'id': idea.id,
+        'asset_symbol': idea.asset.symbol if idea.asset else None,
+        'asset_name': idea.asset.name if idea.asset else None,
+        'title': idea.title,
+        'idea_type': idea.idea_type,
+        'status': idea.status,
+        'thesis_summary': idea.thesis_summary,
+        'entry_zone': idea.entry_zone,
+        'target_1': idea.target_1,
+        'invalidation': idea.invalidation,
+        'time_horizon': idea.time_horizon,
+        'confidence_score': idea.confidence_score,
+        'created_at': idea.created_at.isoformat() if idea.created_at else None
+    }
+
+
+SCREENER_SORT_OPTIONS = {
+    'change_percent': lambda row: row.get('change_percent') if row.get('change_percent') is not None else float('-inf'),
+    'market_cap': lambda row: row.get('market_cap') if row.get('market_cap') is not None else float('-inf'),
+    'volume': lambda row: row.get('volume') if row.get('volume') is not None else float('-inf'),
+    'price': lambda row: row.get('price') if row.get('price') is not None else float('-inf'),
+    'revenue_growth': lambda row: row.get('revenue_growth') if row.get('revenue_growth') is not None else float('-inf'),
+    'eps_growth': lambda row: row.get('eps_growth') if row.get('eps_growth') is not None else float('-inf'),
+    'forward_pe': lambda row: row.get('forward_pe') if row.get('forward_pe') is not None else float('inf'),
+    'symbol': lambda row: row.get('symbol') or '',
+    'pe_ratio': lambda row: row.get('pe_ratio') if row.get('pe_ratio') is not None else float('inf'),
+    'today_change_percent': lambda row: row.get('today_change_percent') if row.get('today_change_percent') is not None else float('-inf'),
+    'dividend_yield': lambda row: row.get('dividend_yield') if row.get('dividend_yield') is not None else float('-inf'),
+    'annualized_return_1y': lambda row: row.get('annualized_return_1y') if row.get('annualized_return_1y') is not None else float('-inf'),
+    'annualized_return_3y': lambda row: row.get('annualized_return_3y') if row.get('annualized_return_3y') is not None else float('-inf'),
+    'annualized_return_5y': lambda row: row.get('annualized_return_5y') if row.get('annualized_return_5y') is not None else float('-inf'),
+    'annualized_return_10y': lambda row: row.get('annualized_return_10y') if row.get('annualized_return_10y') is not None else float('-inf'),
+    'price_performance_5d': lambda row: row.get('price_performance_5d') if row.get('price_performance_5d') is not None else float('-inf'),
+    'price_performance_4w': lambda row: row.get('price_performance_4w') if row.get('price_performance_4w') is not None else float('-inf'),
+    'price_performance_13w': lambda row: row.get('price_performance_13w') if row.get('price_performance_13w') is not None else float('-inf'),
+    'price_performance_52w': lambda row: row.get('price_performance_52w') if row.get('price_performance_52w') is not None else float('-inf'),
+    'revenue': lambda row: row.get('revenue') if row.get('revenue') is not None else float('-inf'),
+    'peg_ratio': lambda row: row.get('peg_ratio') if row.get('peg_ratio') is not None else float('inf'),
+    'industry': lambda row: (row.get('industry') or '').lower(),
+    'days_since_52_week_high': lambda row: row.get('days_since_52_week_high') if row.get('days_since_52_week_high') is not None else float('inf'),
+    'days_since_52_week_low': lambda row: row.get('days_since_52_week_low') if row.get('days_since_52_week_low') is not None else float('inf'),
+    'percent_below_52_week_high': lambda row: row.get('percent_below_52_week_high') if row.get('percent_below_52_week_high') is not None else float('-inf'),
+    'percent_above_52_week_low': lambda row: row.get('percent_above_52_week_low') if row.get('percent_above_52_week_low') is not None else float('-inf'),
+    'total_return': lambda row: row.get('total_return') if row.get('total_return') is not None else float('-inf'),
+    'percent_price_off_10day_sma': lambda row: row.get('percent_price_off_10day_sma') if row.get('percent_price_off_10day_sma') is not None else float('-inf'),
+    'percent_price_off_20day_sma': lambda row: row.get('percent_price_off_20day_sma') if row.get('percent_price_off_20day_sma') is not None else float('-inf'),
+    'percent_price_off_50day_sma': lambda row: row.get('percent_price_off_50day_sma') if row.get('percent_price_off_50day_sma') is not None else float('-inf'),
+    'percent_price_off_200day_sma': lambda row: row.get('percent_price_off_200day_sma') if row.get('percent_price_off_200day_sma') is not None else float('-inf'),
+}
+
+
+def _band_option(option_id, label, min_value=None, max_value=None):
+    return {
+        'id': option_id,
+        'label': label,
+        'min': min_value,
+        'max': max_value
+    }
+
+
+SCREENER_CRITERIA_REGISTRY = {
+    'price': {
+        'label': 'Price',
+        'field': 'price',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_10', '< $10', max_value=10),
+            _band_option('10_25', '$10 - $25', min_value=10, max_value=25),
+            _band_option('25_50', '$25 - $50', min_value=25, max_value=50),
+            _band_option('50_100', '$50 - $100', min_value=50, max_value=100),
+            _band_option('gt_100', '> $100', min_value=100),
+        ]
+    },
+    'market_cap': {
+        'label': 'Market Cap',
+        'field': 'market_cap',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_2b', '< 2B', max_value=2_000_000_000),
+            _band_option('2b_10b', '2B - 10B', min_value=2_000_000_000, max_value=10_000_000_000),
+            _band_option('10b_50b', '10B - 50B', min_value=10_000_000_000, max_value=50_000_000_000),
+            _band_option('50b_200b', '50B - 200B', min_value=50_000_000_000, max_value=200_000_000_000),
+            _band_option('gt_200b', '> 200B', min_value=200_000_000_000),
+        ]
+    },
+    'industry': {
+        'label': 'Industry',
+        'field': 'industry',
+        'type': 'text'
+    },
+    'pe_ratio': {
+        'label': 'P/E',
+        'field': 'pe_ratio',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0', max_value=0),
+            _band_option('0_15', '0 - 15', min_value=0, max_value=15),
+            _band_option('15_25', '15 - 25', min_value=15, max_value=25),
+            _band_option('25_40', '25 - 40', min_value=25, max_value=40),
+            _band_option('gt_40', '> 40', min_value=40),
+        ]
+    },
+    'peg_ratio': {
+        'label': 'PEG Ratio',
+        'field': 'peg_ratio',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0', max_value=0),
+            _band_option('0_2', '0 - 2', min_value=0, max_value=2),
+            _band_option('2_3', '2 - 3', min_value=2, max_value=3),
+            _band_option('3_4', '3 - 4', min_value=3, max_value=4),
+            _band_option('gt_4', '> 4', min_value=4),
+        ]
+    },
+    'revenue': {
+        'label': 'Revenue',
+        'field': 'revenue',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_1b', '< 1B', max_value=1_000_000_000),
+            _band_option('1b_10b', '1B - 10B', min_value=1_000_000_000, max_value=10_000_000_000),
+            _band_option('10b_50b', '10B - 50B', min_value=10_000_000_000, max_value=50_000_000_000),
+            _band_option('50b_200b', '50B - 200B', min_value=50_000_000_000, max_value=200_000_000_000),
+            _band_option('gt_200b', '> 200B', min_value=200_000_000_000),
+        ]
+    },
+    'dividend_yield': {
+        'label': 'Dividend Yield',
+        'field': 'dividend_yield',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0%', max_value=0),
+            _band_option('0_1', '0% - 1%', min_value=0, max_value=1),
+            _band_option('1_2', '1% - 2%', min_value=1, max_value=2),
+            _band_option('2_4', '2% - 4%', min_value=2, max_value=4),
+            _band_option('gt_4', '> 4%', min_value=4),
+        ]
+    },
+    'today_change_percent': {
+        'label': 'Today Price Change',
+        'field': 'today_change_percent',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_m3', '< -3%', max_value=-3),
+            _band_option('m3_0', '-3% - 0%', min_value=-3, max_value=0),
+            _band_option('0_3', '0% - 3%', min_value=0, max_value=3),
+            _band_option('3_7', '3% - 7%', min_value=3, max_value=7),
+            _band_option('gt_7', '> 7%', min_value=7),
+        ]
+    },
+    'percent_below_52_week_high': {
+        'label': '% Below 52 Week High',
+        'field': 'percent_below_52_week_high',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_5', '< 5%', max_value=5),
+            _band_option('5_10', '5% - 10%', min_value=5, max_value=10),
+            _band_option('10_20', '10% - 20%', min_value=10, max_value=20),
+            _band_option('20_35', '20% - 35%', min_value=20, max_value=35),
+            _band_option('gt_35', '> 35%', min_value=35),
+        ]
+    },
+    'percent_above_52_week_low': {
+        'label': '% Above 52 Week Low',
+        'field': 'percent_above_52_week_low',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_5', '< 5%', max_value=5),
+            _band_option('5_15', '5% - 15%', min_value=5, max_value=15),
+            _band_option('15_30', '15% - 30%', min_value=15, max_value=30),
+            _band_option('30_60', '30% - 60%', min_value=30, max_value=60),
+            _band_option('gt_60', '> 60%', min_value=60),
+        ]
+    },
+    'days_since_52_week_high': {
+        'label': 'Days Since 52 Week High',
+        'field': 'days_since_52_week_high',
+        'type': 'bands',
+        'bands': [
+            _band_option('1d_5d', '1 - 5 Days', min_value=1, max_value=6),
+            _band_option('1w_1m', '1 Week - 1 Month', min_value=6, max_value=31),
+            _band_option('1m_1q', '1 Month - 1 Q', min_value=31, max_value=91),
+            _band_option('1q_2q', '1 Q - 2 Q', min_value=91, max_value=181),
+            _band_option('gt_2q', '> 2 Q', min_value=181),
+        ]
+    },
+    'days_since_52_week_low': {
+        'label': 'Days Since 52 Week Low',
+        'field': 'days_since_52_week_low',
+        'type': 'bands',
+        'bands': [
+            _band_option('1d_5d', '1 - 5 Days', min_value=1, max_value=6),
+            _band_option('1w_1m', '1 Week - 1 Month', min_value=6, max_value=31),
+            _band_option('1m_1q', '1 Month - 1 Q', min_value=31, max_value=91),
+            _band_option('1q_2q', '1 Q - 2 Q', min_value=91, max_value=181),
+            _band_option('gt_2q', '> 2 Q', min_value=181),
+        ]
+    },
+    'total_return': {
+        'label': 'Total Return',
+        'field': 'total_return',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0%', max_value=0),
+            _band_option('0_50', '0% - 50%', min_value=0, max_value=50),
+            _band_option('50_150', '50% - 150%', min_value=50, max_value=150),
+            _band_option('150_300', '150% - 300%', min_value=150, max_value=300),
+            _band_option('gt_300', '> 300%', min_value=300),
+        ]
+    },
+    'annualized_return_1y': {
+        'label': '1 Year Annualized',
+        'field': 'annualized_return_1y',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0%', max_value=0),
+            _band_option('0_5', '0% - 5%', min_value=0, max_value=5),
+            _band_option('5_10', '5% - 10%', min_value=5, max_value=10),
+            _band_option('10_20', '10% - 20%', min_value=10, max_value=20),
+            _band_option('gt_20', '> 20%', min_value=20),
+        ]
+    },
+    'annualized_return_3y': {
+        'label': '3 Year Annualized',
+        'field': 'annualized_return_3y',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0%', max_value=0),
+            _band_option('0_5', '0% - 5%', min_value=0, max_value=5),
+            _band_option('5_10', '5% - 10%', min_value=5, max_value=10),
+            _band_option('10_20', '10% - 20%', min_value=10, max_value=20),
+            _band_option('gt_20', '> 20%', min_value=20),
+        ]
+    },
+    'annualized_return_5y': {
+        'label': '5 Year Annualized',
+        'field': 'annualized_return_5y',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0%', max_value=0),
+            _band_option('0_5', '0% - 5%', min_value=0, max_value=5),
+            _band_option('5_10', '5% - 10%', min_value=5, max_value=10),
+            _band_option('10_20', '10% - 20%', min_value=10, max_value=20),
+            _band_option('gt_20', '> 20%', min_value=20),
+        ]
+    },
+    'annualized_return_10y': {
+        'label': '10 Year Annualized',
+        'field': 'annualized_return_10y',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0%', max_value=0),
+            _band_option('0_5', '0% - 5%', min_value=0, max_value=5),
+            _band_option('5_10', '5% - 10%', min_value=5, max_value=10),
+            _band_option('10_20', '10% - 20%', min_value=10, max_value=20),
+            _band_option('gt_20', '> 20%', min_value=20),
+        ]
+    },
+    'price_performance_5d': {
+        'label': 'Price Performance (5 Days)',
+        'field': 'price_performance_5d',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0%', max_value=0),
+            _band_option('0_2', '0% - 2%', min_value=0, max_value=2),
+            _band_option('2_5', '2% - 5%', min_value=2, max_value=5),
+            _band_option('5_10', '5% - 10%', min_value=5, max_value=10),
+            _band_option('gt_10', '> 10%', min_value=10),
+        ]
+    },
+    'price_performance_4w': {
+        'label': 'Price Performance (4 Weeks)',
+        'field': 'price_performance_4w',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0%', max_value=0),
+            _band_option('0_2', '0% - 2%', min_value=0, max_value=2),
+            _band_option('2_5', '2% - 5%', min_value=2, max_value=5),
+            _band_option('5_15', '5% - 15%', min_value=5, max_value=15),
+            _band_option('gt_15', '> 15%', min_value=15),
+        ]
+    },
+    'price_performance_13w': {
+        'label': 'Price Performance (13 Weeks)',
+        'field': 'price_performance_13w',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0%', max_value=0),
+            _band_option('0_5', '0% - 5%', min_value=0, max_value=5),
+            _band_option('5_10', '5% - 10%', min_value=5, max_value=10),
+            _band_option('10_25', '10% - 25%', min_value=10, max_value=25),
+            _band_option('gt_25', '> 25%', min_value=25),
+        ]
+    },
+    'price_performance_52w': {
+        'label': 'Price Performance (52 Weeks)',
+        'field': 'price_performance_52w',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_0', '< 0%', max_value=0),
+            _band_option('0_10', '0% - 10%', min_value=0, max_value=10),
+            _band_option('10_20', '10% - 20%', min_value=10, max_value=20),
+            _band_option('20_40', '20% - 40%', min_value=20, max_value=40),
+            _band_option('gt_40', '> 40%', min_value=40),
+        ]
+    },
+    'percent_price_off_10day_sma': {
+        'label': '% Price Off 10 Day SMA',
+        'field': 'percent_price_off_10day_sma',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_m5', '< -5%', max_value=-5),
+            _band_option('m5_0', '-5% - 0%', min_value=-5, max_value=0),
+            _band_option('0_5', '0% - 5%', min_value=0, max_value=5),
+            _band_option('5_10', '5% - 10%', min_value=5, max_value=10),
+            _band_option('gt_10', '> 10%', min_value=10),
+        ]
+    },
+    'percent_price_off_20day_sma': {
+        'label': '% Price Off 20 Day SMA',
+        'field': 'percent_price_off_20day_sma',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_m5', '< -5%', max_value=-5),
+            _band_option('m5_0', '-5% - 0%', min_value=-5, max_value=0),
+            _band_option('0_5', '0% - 5%', min_value=0, max_value=5),
+            _band_option('5_10', '5% - 10%', min_value=5, max_value=10),
+            _band_option('gt_10', '> 10%', min_value=10),
+        ]
+    },
+    'percent_price_off_50day_sma': {
+        'label': '% Price Off 50 Day SMA',
+        'field': 'percent_price_off_50day_sma',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_m5', '< -5%', max_value=-5),
+            _band_option('m5_0', '-5% - 0%', min_value=-5, max_value=0),
+            _band_option('0_5', '0% - 5%', min_value=0, max_value=5),
+            _band_option('5_10', '5% - 10%', min_value=5, max_value=10),
+            _band_option('gt_10', '> 10%', min_value=10),
+        ]
+    },
+    'percent_price_off_200day_sma': {
+        'label': '% Price Off 200 Day SMA',
+        'field': 'percent_price_off_200day_sma',
+        'type': 'bands',
+        'bands': [
+            _band_option('lt_m10', '< -10%', max_value=-10),
+            _band_option('m10_0', '-10% - 0%', min_value=-10, max_value=0),
+            _band_option('0_5', '0% - 5%', min_value=0, max_value=5),
+            _band_option('5_15', '5% - 15%', min_value=5, max_value=15),
+            _band_option('gt_15', '> 15%', min_value=15),
+        ]
+    },
+}
+
+
+def serialize_screener_criteria():
+    criteria = []
+    for criterion_id, definition in SCREENER_CRITERIA_REGISTRY.items():
+        criteria.append({
+            'id': criterion_id,
+            'label': definition['label'],
+            'type': definition['type'],
+            'field': definition['field'],
+            'bands': definition.get('bands', [])
+        })
+    return criteria
+
+
+def serialize_screener_definition(definition):
+    filters = {}
+    sort = {}
+    if definition.filters_json:
+        try:
+            filters = json.loads(definition.filters_json)
+        except (TypeError, ValueError):
+            filters = {}
+    if definition.sort_json:
+        try:
+            sort = json.loads(definition.sort_json)
+        except (TypeError, ValueError):
+            sort = {}
+
+    return {
+        'id': definition.id,
+        'name': definition.name,
+        'description': definition.description,
+        'filters': filters,
+        'sort': sort,
+        'is_archived': definition.is_archived,
+        'created_at': definition.created_at.isoformat() if definition.created_at else None,
+        'updated_at': definition.updated_at.isoformat() if definition.updated_at else None
+    }
+
+
+def _coerce_float(value):
+    if value in (None, ''):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_int(value, default):
+    if value in (None, ''):
+        return default
+    try:
+        parsed = int(value)
+        return parsed if parsed > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+    return False
+
+
+def _normalize_screener_criteria(criteria):
+    normalized = []
+    if not isinstance(criteria, list):
+        return normalized
+
+    for raw_criterion in criteria[:DEFAULT_SCREENER_MAX_CRITERIA]:
+        if not isinstance(raw_criterion, dict):
+            continue
+        criterion_id = (raw_criterion.get('criterion_id') or raw_criterion.get('id') or '').strip()
+        definition = SCREENER_CRITERIA_REGISTRY.get(criterion_id)
+        if not definition:
+            continue
+
+        normalized_criterion = {'criterion_id': criterion_id, 'type': definition['type']}
+        if definition['type'] == 'text':
+            query = (raw_criterion.get('query') or '').strip()
+            normalized_criterion['query'] = query
+        else:
+            valid_band_ids = {band['id'] for band in definition.get('bands', [])}
+            selected_band_ids = [
+                band_id for band_id in raw_criterion.get('selected_band_ids', [])
+                if band_id in valid_band_ids
+            ]
+            normalized_criterion['selected_band_ids'] = selected_band_ids
+        normalized.append(normalized_criterion)
+    return normalized
+
+
+def _row_matches_band(value, band):
+    if value is None:
+        return False
+    min_value = band.get('min')
+    max_value = band.get('max')
+    if min_value is not None and value < min_value:
+        return False
+    if max_value is not None and value >= max_value:
+        return False
+    return True
+
+
+def _apply_faceted_criteria(rows, criteria):
+    filtered_rows = list(rows)
+    for criterion in criteria:
+        definition = SCREENER_CRITERIA_REGISTRY.get(criterion.get('criterion_id'))
+        if not definition:
+            continue
+        field_name = definition['field']
+        if definition['type'] == 'text':
+            query = (criterion.get('query') or '').strip().lower()
+            if not query:
+                continue
+            filtered_rows = [
+                row for row in filtered_rows
+                if query in str(row.get(field_name) or '').lower()
+            ]
+            continue
+
+        selected_band_ids = criterion.get('selected_band_ids') or []
+        if not selected_band_ids:
+            continue
+        band_map = {band['id']: band for band in definition.get('bands', [])}
+        filtered_rows = [
+            row for row in filtered_rows
+            if any(
+                _row_matches_band(row.get(field_name), band_map[band_id])
+                for band_id in selected_band_ids
+                if band_id in band_map
+            )
+        ]
+    return filtered_rows
+
+
+def normalize_screener_payload(data):
+    data = data or {}
+    filters = data.get('filters') if isinstance(data.get('filters'), dict) else data
+    sort = data.get('sort') if isinstance(data.get('sort'), dict) else {}
+
+    normalized_filters = {
+        'watchlist_id': _coerce_int(filters.get('watchlist_id'), None),
+        'symbol_query': (filters.get('symbol_query') or '').strip().upper(),
+        'sector_query': (filters.get('sector_query') or '').strip(),
+        'min_price': _coerce_float(filters.get('min_price')),
+        'max_price': _coerce_float(filters.get('max_price')),
+        'min_market_cap': _coerce_float(filters.get('min_market_cap')),
+        'min_volume': _coerce_float(filters.get('min_volume')),
+        'min_change_percent': _coerce_float(filters.get('min_change_percent')),
+        'min_revenue_growth': _coerce_float(filters.get('min_revenue_growth')),
+        'min_eps_growth': _coerce_float(filters.get('min_eps_growth')),
+        'max_forward_pe': _coerce_float(filters.get('max_forward_pe')),
+        'above_ma50': _coerce_bool(filters.get('above_ma50')),
+        'above_ma200': _coerce_bool(filters.get('above_ma200')),
+        'criteria': _normalize_screener_criteria(filters.get('criteria')),
+    }
+    normalized_sort = {
+        'by': (sort.get('by') or data.get('sort_by') or 'market_cap').strip(),
+        'direction': (sort.get('direction') or data.get('sort_direction') or 'desc').strip().lower()
+    }
+    if normalized_sort['by'] not in SCREENER_SORT_OPTIONS:
+        normalized_sort['by'] = 'change_percent'
+    if normalized_sort['direction'] not in {'asc', 'desc'}:
+        normalized_sort['direction'] = 'desc'
+
+    return {
+        'filters': normalized_filters,
+        'sort': normalized_sort,
+        'limit': _coerce_int(data.get('limit'), None)
+    }
+
+
+def get_latest_snapshot_map(model, date_field_name):
+    date_column = getattr(model, date_field_name)
+    rows = model.query.order_by(model.asset_id.asc(), date_column.desc(), model.fetched_at.desc()).all()
+    latest_rows = {}
+    for row in rows:
+        latest_rows.setdefault(row.asset_id, row)
+    return latest_rows
+
+
+def get_latest_ticker_snapshot_map(asset_ids=None):
+    query = TickerSnapshotLatest.query
+    if asset_ids is not None:
+        query = query.filter(TickerSnapshotLatest.asset_id.in_(asset_ids))
+    return {row.asset_id: row for row in query.all()}
+
+
+def build_screener_row(asset, ticker_snapshot=None, fundamentals=None, market=None):
+    if ticker_snapshot is not None:
+        market_price = market.price if market and market.price is not None else ticker_snapshot.last_price
+        market_volume = market.volume if market and market.volume is not None else ticker_snapshot.volume
+        market_cap = market.market_cap if market and market.market_cap is not None else ticker_snapshot.market_cap
+        avg_volume = market.avg_volume if market and market.avg_volume is not None else ticker_snapshot.avg_volume
+        moving_average_50 = market.moving_average_50 if market and market.moving_average_50 is not None else ticker_snapshot.moving_average_50
+        moving_average_200 = market.moving_average_200 if market and market.moving_average_200 is not None else ticker_snapshot.moving_average_200
+        today_change_percent = market.change_percent if market and market.change_percent is not None else ticker_snapshot.today_change_percent
+        pe_ratio = fundamentals.pe_ratio if fundamentals and fundamentals.pe_ratio is not None else ticker_snapshot.pe_ratio
+        forward_pe = fundamentals.forward_pe if fundamentals and fundamentals.forward_pe is not None else ticker_snapshot.forward_pe
+        revenue_growth = fundamentals.revenue_growth if fundamentals and fundamentals.revenue_growth is not None else ticker_snapshot.revenue_growth
+        eps_growth = fundamentals.eps_growth if fundamentals and fundamentals.eps_growth is not None else ticker_snapshot.eps_growth
+        percent_below_52_week_high = ticker_snapshot.percent_below_52_week_high
+        if market and market.fifty_two_week_high not in (None, 0) and market_price is not None:
+            percent_below_52_week_high = ((market.fifty_two_week_high - market_price) / market.fifty_two_week_high) * 100.0
+        percent_above_52_week_low = ticker_snapshot.percent_above_52_week_low
+        if market and market.fifty_two_week_low not in (None, 0) and market_price is not None:
+            percent_above_52_week_low = ((market_price - market.fifty_two_week_low) / market.fifty_two_week_low) * 100.0
+        percent_price_off_50day_sma = ticker_snapshot.percent_price_off_50day_sma
+        if market_price is not None and moving_average_50 not in (None, 0):
+            percent_price_off_50day_sma = ((market_price - moving_average_50) / moving_average_50) * 100.0
+        percent_price_off_200day_sma = ticker_snapshot.percent_price_off_200day_sma
+        if market_price is not None and moving_average_200 not in (None, 0):
+            percent_price_off_200day_sma = ((market_price - moving_average_200) / moving_average_200) * 100.0
+        return {
+            'asset_id': asset.id,
+            'symbol': asset.symbol,
+            'name': asset.name,
+            'asset_type': asset.asset_type,
+            'sector': asset.sector,
+            'price': market_price,
+            'change_percent': today_change_percent,
+            'market_cap': market_cap,
+            'volume': market_volume,
+            'avg_volume': avg_volume,
+            'moving_average_50': moving_average_50,
+            'moving_average_200': moving_average_200,
+            'snapshot_fetched_at': market.fetched_at.isoformat() if market and market.fetched_at else ticker_snapshot.quote_as_of.isoformat() if ticker_snapshot.quote_as_of else ticker_snapshot.updated_at.isoformat() if ticker_snapshot.updated_at else None,
+            'revenue_growth': revenue_growth,
+            'eps_growth': eps_growth,
+            'forward_pe': forward_pe,
+            'fundamentals_fetched_at': fundamentals.fetched_at.isoformat() if fundamentals and fundamentals.fetched_at else ticker_snapshot.fundamentals_as_of.isoformat() if ticker_snapshot.fundamentals_as_of else None,
+            'industry': asset.industry,
+            'pe_ratio': pe_ratio,
+            'peg_ratio': None,
+            'revenue': ticker_snapshot.revenue,
+            'dividend_yield': ticker_snapshot.dividend_yield,
+            'today_change_percent': today_change_percent,
+            'percent_below_52_week_high': percent_below_52_week_high,
+            'percent_above_52_week_low': percent_above_52_week_low,
+            'days_since_52_week_high': None,
+            'days_since_52_week_low': None,
+            'total_return': None,
+            'annualized_return_1y': None,
+            'annualized_return_3y': None,
+            'annualized_return_5y': None,
+            'annualized_return_10y': None,
+            'price_performance_5d': None,
+            'price_performance_4w': None,
+            'price_performance_13w': None,
+            'price_performance_52w': None,
+            'percent_price_off_10day_sma': None,
+            'percent_price_off_20day_sma': None,
+            'percent_price_off_50day_sma': percent_price_off_50day_sma,
+            'percent_price_off_200day_sma': percent_price_off_200day_sma,
+        }
+
+    return {
+        'asset_id': asset.id,
+        'symbol': asset.symbol,
+        'name': asset.name,
+        'asset_type': asset.asset_type,
+        'sector': asset.sector,
+        'price': market.price,
+        'change_percent': market.change_percent,
+        'market_cap': market.market_cap,
+        'volume': market.volume,
+        'avg_volume': market.avg_volume,
+        'moving_average_50': market.moving_average_50,
+        'moving_average_200': market.moving_average_200,
+        'snapshot_fetched_at': market.fetched_at.isoformat() if market.fetched_at else None,
+        'revenue_growth': fundamentals.revenue_growth if fundamentals else None,
+        'eps_growth': fundamentals.eps_growth if fundamentals else None,
+        'forward_pe': fundamentals.forward_pe if fundamentals else None,
+        'fundamentals_fetched_at': fundamentals.fetched_at.isoformat() if fundamentals and fundamentals.fetched_at else None,
+        'industry': asset.industry,
+        'pe_ratio': fundamentals.pe_ratio if fundamentals else None,
+        'peg_ratio': None,
+        'revenue': None,
+        'dividend_yield': None,
+        'today_change_percent': market.change_percent,
+        'percent_below_52_week_high': ((market.fifty_two_week_high - market.price) / market.fifty_two_week_high) * 100.0
+        if market.price is not None and market.fifty_two_week_high not in (None, 0) else None,
+        'percent_above_52_week_low': ((market.price - market.fifty_two_week_low) / market.fifty_two_week_low) * 100.0
+        if market.price is not None and market.fifty_two_week_low not in (None, 0) else None,
+        'days_since_52_week_high': None,
+        'days_since_52_week_low': None,
+        'total_return': None,
+        'annualized_return_1y': None,
+        'annualized_return_3y': None,
+        'annualized_return_5y': None,
+        'annualized_return_10y': None,
+        'price_performance_5d': None,
+        'price_performance_4w': None,
+        'price_performance_13w': None,
+        'price_performance_52w': None,
+        'percent_price_off_10day_sma': None,
+        'percent_price_off_20day_sma': None,
+        'percent_price_off_50day_sma': ((market.price - market.moving_average_50) / market.moving_average_50) * 100.0
+        if market.price is not None and market.moving_average_50 not in (None, 0) else None,
+        'percent_price_off_200day_sma': ((market.price - market.moving_average_200) / market.moving_average_200) * 100.0
+        if market.price is not None and market.moving_average_200 not in (None, 0) else None,
+    }
+
+
+def run_cached_screener_query(payload, asset_ids=None, watchlist=None):
+    normalized = normalize_screener_payload(payload)
+    filters = normalized['filters']
+    ticker_snapshot_map = get_latest_ticker_snapshot_map(asset_ids)
+    market_map = get_latest_snapshot_map(MarketSnapshot, 'snapshot_date')
+    fundamental_map = get_latest_snapshot_map(FundamentalSnapshot, 'as_of_date')
+    if not ticker_snapshot_map and not market_map:
+        return {
+            'filters': filters,
+            'sort': normalized['sort'],
+            'results': [],
+            'count': 0,
+            'total_matches': 0,
+            'watchlist': watchlist
+        }
+
+    scoped_asset_ids = list(ticker_snapshot_map.keys()) if ticker_snapshot_map else list(market_map.keys())
+    if asset_ids is not None:
+        scoped_asset_ids = [asset_id for asset_id in scoped_asset_ids if asset_id in set(asset_ids)]
+    if not scoped_asset_ids and asset_ids is None and market_map:
+        scoped_asset_ids = list(market_map.keys())
+    if not scoped_asset_ids:
+        return {
+            'filters': filters,
+            'sort': normalized['sort'],
+            'results': [],
+            'count': 0,
+            'total_matches': 0,
+            'watchlist': watchlist
+        }
+
+    assets = Asset.query.filter(Asset.id.in_(scoped_asset_ids)).all()
+    rows = []
+    for asset in assets:
+        ticker_snapshot = ticker_snapshot_map.get(asset.id)
+        market = market_map.get(asset.id)
+        if not ticker_snapshot and not market:
+            continue
+        fundamentals = fundamental_map.get(asset.id)
+        row = build_screener_row(asset, ticker_snapshot=ticker_snapshot, fundamentals=fundamentals, market=market)
+
+        if filters['symbol_query']:
+            symbol_text = row['symbol'] or ''
+            name_text = row['name'] or ''
+            if filters['symbol_query'] not in symbol_text and filters['symbol_query'] not in name_text.upper():
+                continue
+        if filters['sector_query']:
+            sector_text = (row['sector'] or '').lower()
+            if filters['sector_query'].lower() not in sector_text:
+                continue
+        if filters['min_price'] is not None and (row['price'] is None or row['price'] < filters['min_price']):
+            continue
+        if filters['max_price'] is not None and (row['price'] is None or row['price'] > filters['max_price']):
+            continue
+        if filters['min_market_cap'] is not None and (row['market_cap'] is None or row['market_cap'] < filters['min_market_cap']):
+            continue
+        if filters['min_volume'] is not None and (row['volume'] is None or row['volume'] < filters['min_volume']):
+            continue
+        if filters['min_change_percent'] is not None and (row['change_percent'] is None or row['change_percent'] < filters['min_change_percent']):
+            continue
+        if filters['min_revenue_growth'] is not None and (row['revenue_growth'] is None or row['revenue_growth'] < filters['min_revenue_growth']):
+            continue
+        if filters['min_eps_growth'] is not None and (row['eps_growth'] is None or row['eps_growth'] < filters['min_eps_growth']):
+            continue
+        if filters['max_forward_pe'] is not None and (row['forward_pe'] is None or row['forward_pe'] > filters['max_forward_pe']):
+            continue
+        if filters['above_ma50'] and (row['price'] is None or row['moving_average_50'] is None or row['price'] <= row['moving_average_50']):
+            continue
+        if filters['above_ma200'] and (row['price'] is None or row['moving_average_200'] is None or row['price'] <= row['moving_average_200']):
+            continue
+
+        rows.append(row)
+
+    rows = _apply_faceted_criteria(rows, filters['criteria'])
+
+    reverse = normalized['sort']['direction'] == 'desc'
+    rows.sort(key=SCREENER_SORT_OPTIONS[normalized['sort']['by']], reverse=reverse)
+    limited_rows = rows[:normalized['limit']] if normalized['limit'] else rows
+    return {
+        'filters': filters,
+        'sort': normalized['sort'],
+        'results': limited_rows,
+        'count': len(limited_rows),
+        'total_matches': len(rows),
+        'watchlist': watchlist
+    }
+
+
+def run_watchlist_cached_screener(dashboard_id, payload):
+    normalized = normalize_screener_payload(payload)
+    watchlist_id = normalized['filters'].get('watchlist_id')
+    if not watchlist_id:
+        return run_cached_screener_query(payload)
+
+    watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+    if not watchlist:
+        return {
+            'filters': normalized['filters'],
+            'sort': normalized['sort'],
+            'results': [],
+            'count': 0,
+            'total_matches': 0,
+            'watchlist': None
+        }
+
+    asset_ids = [item.asset_id for item in watchlist.items if item.asset_id]
+    return run_cached_screener_query(
+        payload,
+        asset_ids=asset_ids,
+        watchlist={'id': watchlist.id, 'name': watchlist.name}
+    )
 
 # Security Helper Functions
 # =========================
@@ -461,8 +1878,16 @@ database_url = os.environ.get('DATABASE_URL') or os.environ.get('SQLALCHEMY_DATA
 # Render/Neon sometimes use postgres://; SQLAlchemy expects postgresql://
 if database_url and database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql://', 1)
+if not database_url and 'pytest' in sys.modules:
+    database_url = 'sqlite:////tmp/expenses_pytest.db'
 
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url or 'sqlite:///expenses.db'
+if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite:'):
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'connect_args': {
+            'timeout': 30,
+        }
+    }
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize extensions
@@ -482,12 +1907,64 @@ google = oauth.register(
 )
 
 # Import models
-from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession
+from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar
+
+
+def ensure_schema_compatibility():
+    inspector = inspect(db.engine)
+
+    def ensure_columns(table_name, columns):
+        if not inspector.has_table(table_name):
+            return
+        existing_columns = {column['name'] for column in inspector.get_columns(table_name)}
+        for column_name, column_type in columns:
+            if column_name in existing_columns:
+                continue
+            db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+            db.session.commit()
+
+    ensure_columns('asset', [
+        ('status', "VARCHAR(32) DEFAULT 'active'"),
+        ('added_source', "VARCHAR(32) DEFAULT 'user'"),
+    ])
+    ensure_columns('ticker_snapshot_latest', [
+        ('peg_ratio', 'FLOAT'),
+        ('days_since_52_week_high', 'INTEGER'),
+        ('days_since_52_week_low', 'INTEGER'),
+        ('sma_10', 'FLOAT'),
+        ('sma_20', 'FLOAT'),
+        ('price_performance_5d', 'FLOAT'),
+        ('price_performance_4w', 'FLOAT'),
+        ('price_performance_13w', 'FLOAT'),
+        ('price_performance_52w', 'FLOAT'),
+        ('annualized_return_1y', 'FLOAT'),
+        ('annualized_return_3y', 'FLOAT'),
+        ('annualized_return_5y', 'FLOAT'),
+        ('annualized_return_10y', 'FLOAT'),
+        ('total_return', 'FLOAT'),
+        ('percent_price_off_10day_sma', 'FLOAT'),
+        ('percent_price_off_20day_sma', 'FLOAT'),
+    ])
+    ensure_columns('ticker_fetch_state', [
+        ('priority_requested_at', 'DATETIME'),
+        ('last_market_refresh_at', 'DATETIME'),
+        ('last_market_close_trade_date', 'DATE'),
+        ('last_fundamentals_trade_date', 'DATE'),
+    ])
+
 
 # Initialize database tables
 def init_db():
     with app.app_context():
         db.create_all()
+        if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite:'):
+            try:
+                db.session.execute(text("PRAGMA journal_mode=WAL"))
+                db.session.execute(text("PRAGMA busy_timeout = 30000"))
+                db.session.commit()
+            except OperationalError:
+                db.session.rollback()
+        ensure_schema_compatibility()
         logger.info("Database tables created successfully")
 
 # Create tables on startup
@@ -497,7 +1974,10 @@ init_db()
 @app.route('/')
 def index():
     if 'user_id' in session:
-        return redirect(url_for('dashboard_list'))
+        user_id = session['user_id']
+        user_dashboards = DashboardMember.query.filter_by(user_id=user_id).all()
+        dashboards = [member.dashboard for member in user_dashboards]
+        return render_template('index.html', dashboards=dashboards)
     return render_template('index.html')
 
 # Username/Password Authentication
@@ -522,7 +2002,7 @@ def login():
                 'picture': user.get_profile_picture()
             }
             flash('Login successful!', 'success')
-            return redirect(url_for('dashboard_list'))
+            return redirect(url_for('index'))
         else:
             flash('Invalid username/email or password', 'danger')
     
@@ -611,7 +2091,7 @@ def auth_callback():
         
         session['user_id'] = user.id
         
-    return redirect(url_for('dashboard_list'))
+    return redirect(url_for('index'))
 
 @app.route('/logout')
 def logout():
@@ -637,13 +2117,32 @@ def dashboard_list():
                          dashboards=dashboards, 
                          pending_invitations=pending_invitations)
 
+
+@app.route('/investing')
+def investing_list():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+
+    user_id = session['user_id']
+    user_dashboards = DashboardMember.query.filter_by(user_id=user_id).all()
+    dashboards = [member.dashboard for member in user_dashboards]
+    pending_invitations = DashboardInvitation.query.filter_by(
+        invited_user_id=user_id,
+        status='pending'
+    ).all()
+
+    return render_template('investment_list.html', dashboards=dashboards, pending_invitations=pending_invitations)
+
 @app.route('/settings')
 def settings():
     if 'user_id' not in session:
         return redirect(url_for('login'))
     
     user = User.query.get(session['user_id'])
-    return render_template('settings.html', user=user)
+    next_url = request.args.get('next', '').strip()
+    if not next_url.startswith('/'):
+        next_url = url_for('index')
+    return render_template('settings.html', user=user, back_url=next_url)
 
 @app.route('/api/settings/update-ai-settings', methods=['POST'])
 def update_ai_settings():
@@ -732,6 +2231,15 @@ def delete_dashboard(dashboard_id):
         # Delete expenses
         Expense.query.filter_by(dashboard_id=dashboard_id).delete()
 
+        # Delete investing workspace records scoped to this dashboard
+        watchlists = Watchlist.query.filter_by(dashboard_id=dashboard_id).all()
+        watchlist_ids = [watchlist.id for watchlist in watchlists]
+        if watchlist_ids:
+            WatchlistItem.query.filter(WatchlistItem.watchlist_id.in_(watchlist_ids)).delete(synchronize_session=False)
+        Watchlist.query.filter_by(dashboard_id=dashboard_id).delete()
+        TradeIdea.query.filter_by(dashboard_id=dashboard_id).delete()
+        ScreenerDefinition.query.filter_by(dashboard_id=dashboard_id).delete()
+
         # Delete per-dashboard user settings
         UserDashboardSettings.query.filter_by(dashboard_id=dashboard_id).delete()
         
@@ -768,10 +2276,7 @@ def dashboard_view(dashboard_id):
         return redirect(url_for('login'))
     
     # Check if user has access to this dashboard
-    member = DashboardMember.query.filter_by(
-        dashboard_id=dashboard_id, 
-        user_id=session['user_id']
-    ).first()
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
     
     if not member:
         return "Access denied", 403
@@ -779,6 +2284,562 @@ def dashboard_view(dashboard_id):
     dashboard = Dashboard.query.get(dashboard_id)
     current_year_month = datetime.now().strftime('%Y-%m')
     return render_template('dashboard_view.html', dashboard=dashboard, current_year_month=current_year_month)
+
+
+@app.route('/dashboard/<int:dashboard_id>/investing')
+def investing_workspace(dashboard_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+
+    if not member:
+        return "Access denied", 403
+
+    default_watchlist = ensure_default_screener_watchlist(dashboard_id, session['user_id'])
+    default_screener = ensure_default_screener_definition(dashboard_id, session['user_id'], default_watchlist.id)
+    _, selected_watchlist = resolve_selected_watchlist(dashboard_id, session['user_id'], default_watchlist)
+    _, selected_screener = resolve_selected_screener(dashboard_id, session['user_id'], default_screener)
+    dashboard = Dashboard.query.get(dashboard_id)
+    watchlists = Watchlist.query.filter_by(dashboard_id=dashboard_id).order_by(Watchlist.created_at.desc()).all()
+    serialized_watchlists = [serialize_watchlist(watchlist) for watchlist in watchlists]
+    serialized_selected_watchlist = serialize_watchlist(selected_watchlist) if selected_watchlist else None
+    trade_ideas = TradeIdea.query.filter_by(dashboard_id=dashboard_id).order_by(TradeIdea.created_at.desc()).all()
+    serialized_trade_ideas = [serialize_trade_idea(idea) for idea in trade_ideas]
+    screeners = ScreenerDefinition.query.filter_by(dashboard_id=dashboard_id, is_archived=False).order_by(ScreenerDefinition.updated_at.desc()).all()
+    serialized_screeners = [serialize_screener_definition(screener) for screener in screeners]
+    return render_template(
+        'investing_workspace.html',
+        dashboard=dashboard,
+        watchlists=serialized_watchlists,
+        selected_watchlist=serialized_selected_watchlist,
+        trade_ideas=serialized_trade_ideas,
+        screeners=serialized_screeners,
+        selected_screener=serialize_screener_definition(selected_screener) if selected_screener else None,
+        screener_criteria=serialize_screener_criteria(),
+        default_screener_watchlist_id=default_watchlist.id
+    )
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlists', methods=['GET'])
+def get_watchlists(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    ensure_default_screener_watchlist(dashboard_id, session['user_id'])
+    watchlists = Watchlist.query.filter_by(dashboard_id=dashboard_id).order_by(Watchlist.created_at.desc()).all()
+    return jsonify({'watchlists': [serialize_watchlist(watchlist) for watchlist in watchlists]})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlist-selection', methods=['PUT'])
+def update_selected_investing_watchlist(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    default_watchlist = ensure_default_screener_watchlist(dashboard_id, session['user_id'])
+    data = request.get_json() or {}
+    watchlist_id = _coerce_int(data.get('watchlist_id'), None)
+
+    if watchlist_id is None:
+        selected_watchlist = default_watchlist
+    else:
+        selected_watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+        if not selected_watchlist:
+            return jsonify({'error': 'Watchlist not found'}), 404
+
+    settings = get_or_create_dashboard_settings(session['user_id'], dashboard_id)
+    settings.selected_investing_watchlist_id = selected_watchlist.id
+    db.session.commit()
+
+    return jsonify({
+        'message': 'Selected watchlist updated successfully',
+        'selected_watchlist': serialize_watchlist(selected_watchlist)
+    })
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/screener-selection', methods=['PUT'])
+def update_selected_investing_screener(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    default_watchlist = ensure_default_screener_watchlist(dashboard_id, session['user_id'])
+    default_screener = ensure_default_screener_definition(dashboard_id, session['user_id'], default_watchlist.id)
+    data = request.get_json() or {}
+    screener_id = _coerce_int(data.get('screener_id'), None)
+
+    if screener_id is None:
+        selected_screener = default_screener
+    else:
+        selected_screener = ScreenerDefinition.query.filter_by(
+            id=screener_id,
+            dashboard_id=dashboard_id,
+            is_archived=False
+        ).first()
+        if not selected_screener:
+            return jsonify({'error': 'Screener not found'}), 404
+
+    settings = get_or_create_dashboard_settings(session['user_id'], dashboard_id)
+    settings.selected_investing_screener_id = selected_screener.id
+    db.session.commit()
+
+    return jsonify({
+        'message': 'Selected screener updated successfully',
+        'selected_screener': serialize_screener_definition(selected_screener)
+    })
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlists/<int:watchlist_id>/cache-refresh', methods=['POST'])
+def start_watchlist_cache_refresh(dashboard_id, watchlist_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+    if not watchlist:
+        return jsonify({'error': 'Watchlist not found'}), 404
+
+    existing_job = get_watchlist_refresh_job(dashboard_id, session['user_id'], watchlist_id)
+    if existing_job and existing_job.get('is_running'):
+        return jsonify(existing_job), 202
+
+    coverage = get_watchlist_cache_coverage(watchlist)
+    job_payload = {
+        'is_running': True,
+        'processed_count': 0,
+        'refreshed_count': 0,
+        'failed_count': 0,
+        'cached_count': coverage['cached_count'],
+        'total_items': coverage['total_items'],
+        'total_to_refresh': coverage['missing_count'],
+        'started_at': datetime.utcnow().isoformat(),
+        'completed_at': None,
+        'error': None
+    }
+    set_watchlist_refresh_job(dashboard_id, session['user_id'], watchlist_id, job_payload)
+    worker = threading.Thread(
+        target=run_background_watchlist_cache_refresh,
+        args=(dashboard_id, session['user_id'], watchlist_id),
+        daemon=True
+    )
+    worker.start()
+    return jsonify(job_payload), 202
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlists/<int:watchlist_id>/cache-refresh-status', methods=['GET'])
+def get_watchlist_cache_refresh_status(dashboard_id, watchlist_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+    if not watchlist:
+        return jsonify({'error': 'Watchlist not found'}), 404
+
+    coverage = get_watchlist_cache_coverage(watchlist)
+    job = get_watchlist_refresh_job(dashboard_id, session['user_id'], watchlist_id) or {}
+    payload = {
+        'is_running': bool(job.get('is_running')),
+        'processed_count': job.get('processed_count', 0),
+        'refreshed_count': job.get('refreshed_count', 0),
+        'failed_count': job.get('failed_count', 0),
+        'cached_count': coverage['cached_count'],
+        'total_items': coverage['total_items'],
+        'total_to_refresh': job.get('total_to_refresh', coverage['missing_count']),
+        'started_at': job.get('started_at'),
+        'completed_at': job.get('completed_at'),
+        'error': job.get('error')
+    }
+    return jsonify(payload)
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlists/<int:watchlist_id>/refresh-status', methods=['GET'])
+def get_watchlist_visible_refresh_status(dashboard_id, watchlist_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+    if not watchlist:
+        return jsonify({'error': 'Watchlist not found'}), 404
+
+    item_ids = request.args.getlist('item_id', type=int)
+    return jsonify(get_watchlist_priority_refresh_status(watchlist, item_ids=item_ids))
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlists', methods=['POST'])
+def create_watchlist(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'Watchlist name is required'}), 400
+
+    watchlist = Watchlist(
+        dashboard_id=dashboard_id,
+        created_by=session['user_id'],
+        name=name,
+        description=(data.get('description') or '').strip()
+    )
+    db.session.add(watchlist)
+    db.session.commit()
+    return jsonify({'message': 'Watchlist created successfully', 'watchlist': serialize_watchlist(watchlist)}), 201
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlists/<int:watchlist_id>/items', methods=['POST'])
+def add_watchlist_item(dashboard_id, watchlist_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+    if not watchlist:
+        return jsonify({'error': 'Watchlist not found'}), 404
+    target_watchlist_id = watchlist.id
+
+    data = request.get_json() or {}
+    symbol = (data.get('symbol') or '').strip()
+    if not symbol:
+        return jsonify({'error': 'Ticker symbol is required'}), 400
+
+    try:
+        service = get_market_data_service()
+        asset = service.get_or_create_asset(symbol)
+        enqueue_asset_refresh(asset, include_backfill=False)
+        existing = WatchlistItem.query.filter_by(watchlist_id=target_watchlist_id, asset_id=asset.id).first()
+        if existing:
+            db.session.commit()
+            return jsonify({'message': 'Asset already exists in watchlist', 'item': serialize_watchlist_item(existing)}), 200
+
+        item = WatchlistItem(
+            watchlist_id=target_watchlist_id,
+            asset_id=asset.id,
+            added_by=session['user_id'],
+            position_status='watching',
+            thesis_summary=(data.get('thesis_summary') or '').strip() or None
+        )
+        db.session.add(item)
+        db.session.commit()
+        item = WatchlistItem.query.get(item.id)
+        return jsonify({'message': 'Asset added to watchlist', 'item': serialize_watchlist_item(item)}), 201
+    except MarketDataError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("Failed to add watchlist item", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+        return jsonify({'error': f'Failed to add symbol: {exc}'}), 500
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlists/<int:watchlist_id>/items/<int:item_id>', methods=['DELETE'])
+def delete_watchlist_item(dashboard_id, watchlist_id, item_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+    if not watchlist:
+        return jsonify({'error': 'Watchlist not found'}), 404
+
+    item = WatchlistItem.query.filter_by(id=item_id, watchlist_id=watchlist_id).first()
+    if not item:
+        return jsonify({'error': 'Watchlist item not found'}), 404
+
+    db.session.delete(item)
+    db.session.commit()
+    return jsonify({'message': 'Watchlist item removed successfully'})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlists/<int:watchlist_id>/items/<int:item_id>', methods=['PUT'])
+def update_watchlist_item(dashboard_id, watchlist_id, item_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+    if not watchlist:
+        return jsonify({'error': 'Watchlist not found'}), 404
+
+    item = WatchlistItem.query.filter_by(id=item_id, watchlist_id=watchlist_id).first()
+    if not item:
+        return jsonify({'error': 'Watchlist item not found'}), 404
+
+    data = request.get_json() or {}
+    thesis_summary = data.get('thesis_summary')
+    if thesis_summary is not None:
+        item.thesis_summary = thesis_summary.strip() or None
+
+    db.session.commit()
+    return jsonify({'message': 'Watchlist item updated successfully', 'item': serialize_watchlist_item(item)})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlists/<int:watchlist_id>/refresh', methods=['POST'])
+def refresh_watchlist(dashboard_id, watchlist_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+    if not watchlist:
+        return jsonify({'error': 'Watchlist not found'}), 404
+
+    data = request.get_json(silent=True) or {}
+    requested_item_ids = {
+        item_id for item_id in (data.get('item_ids') or [])
+        if isinstance(item_id, int)
+    }
+    items_to_refresh = [
+        item for item in watchlist.items
+        if not requested_item_ids or item.id in requested_item_ids
+    ]
+    for item in items_to_refresh:
+        if item.asset:
+            enqueue_asset_refresh(item.asset, include_backfill=False, include_fundamentals=True, include_intraday=True, priority=True)
+
+    db.session.commit()
+    return jsonify({
+        'message': f'Queued {len(items_to_refresh)} ticker{"s" if len(items_to_refresh) != 1 else ""} for priority refresh',
+        'queued': [item.asset.symbol for item in items_to_refresh if item.asset],
+        'requested_count': len(items_to_refresh),
+        'pending_count': len(items_to_refresh),
+        'status': get_watchlist_priority_refresh_status(watchlist, item_ids=[item.id for item in items_to_refresh]),
+    })
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/assets/<string:symbol>/refresh', methods=['POST'])
+def refresh_investing_asset(symbol, dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    try:
+        service = get_market_data_service()
+        asset = service.get_or_create_asset(symbol)
+        enqueue_asset_refresh(asset, include_backfill=False, include_fundamentals=True, include_intraday=True, priority=True)
+        db.session.commit()
+        return jsonify({
+            'message': f'Queued {asset.symbol} for priority refresh',
+            'asset': {
+                'symbol': asset.symbol,
+                'name': asset.name,
+            }
+        })
+    except MarketDataError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("Failed to queue asset refresh", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+        return jsonify({'error': f'Failed to queue asset refresh: {exc}'}), 500
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/assets/<string:symbol>/refresh-status', methods=['GET'])
+def get_investing_asset_refresh_status(symbol, dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    normalized_symbol = normalize_symbol(symbol)
+    asset = Asset.query.filter_by(symbol=normalized_symbol).first()
+    if not asset:
+        return jsonify({'error': 'Asset not found'}), 404
+
+    return jsonify(get_asset_priority_refresh_status(asset))
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trade-ideas', methods=['GET'])
+def get_trade_ideas(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    ideas = TradeIdea.query.filter_by(dashboard_id=dashboard_id).order_by(TradeIdea.created_at.desc()).all()
+    return jsonify({'trade_ideas': [serialize_trade_idea(idea) for idea in ideas]})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trade-ideas', methods=['POST'])
+def create_trade_idea(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    data = request.get_json() or {}
+    symbol = (data.get('symbol') or '').strip()
+    title = (data.get('title') or '').strip()
+    if not symbol or not title:
+        return jsonify({'error': 'Symbol and title are required'}), 400
+
+    try:
+        service = get_market_data_service()
+        asset = service.get_or_create_asset(symbol)
+        enqueue_asset_refresh(asset, include_backfill=False)
+        idea = TradeIdea(
+            dashboard_id=dashboard_id,
+            asset_id=asset.id,
+            created_by=session['user_id'],
+            source_type='manual',
+            idea_type=(data.get('idea_type') or 'watch').strip(),
+            title=title,
+            thesis_summary=(data.get('thesis_summary') or '').strip() or None,
+            entry_zone=(data.get('entry_zone') or '').strip() or None,
+            target_1=(data.get('target_1') or '').strip() or None,
+            invalidation=(data.get('invalidation') or '').strip() or None,
+            time_horizon=(data.get('time_horizon') or '').strip() or None,
+            confidence_score=data.get('confidence_score')
+        )
+        db.session.add(idea)
+        db.session.commit()
+        idea = TradeIdea.query.get(idea.id)
+        return jsonify({'message': 'Trade idea created successfully', 'trade_idea': serialize_trade_idea(idea)}), 201
+    except MarketDataError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("Failed to create trade idea", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+        return jsonify({'error': f'Failed to create trade idea: {exc}'}), 500
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/screeners', methods=['GET'])
+def get_screeners(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    default_watchlist = ensure_default_screener_watchlist(dashboard_id, session['user_id'])
+    ensure_default_screener_definition(dashboard_id, session['user_id'], default_watchlist.id)
+    screeners = (
+        ScreenerDefinition.query.filter_by(dashboard_id=dashboard_id, is_archived=False)
+        .order_by(ScreenerDefinition.updated_at.desc())
+        .all()
+    )
+    return jsonify({'screeners': [serialize_screener_definition(screener) for screener in screeners]})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/screeners', methods=['POST'])
+def create_screener(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'Screener name is required'}), 400
+
+    normalized = normalize_screener_payload(data)
+    screener = ScreenerDefinition(
+        dashboard_id=dashboard_id,
+        created_by=session['user_id'],
+        name=name,
+        description=(data.get('description') or '').strip() or None,
+        filters_json=json.dumps(normalized['filters']),
+        sort_json=json.dumps(normalized['sort'])
+    )
+    db.session.add(screener)
+    db.session.commit()
+    return jsonify({'message': 'Screener saved successfully', 'screener': serialize_screener_definition(screener)}), 201
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/screeners/run', methods=['POST'])
+def run_screener(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    default_watchlist = ensure_default_screener_watchlist(dashboard_id, session['user_id'])
+    data = request.get_json() or {}
+    screener_id = data.get('screener_id')
+    if screener_id:
+        definition = ScreenerDefinition.query.filter_by(
+            id=screener_id,
+            dashboard_id=dashboard_id,
+            is_archived=False
+        ).first()
+        if not definition:
+            return jsonify({'error': 'Screener not found'}), 404
+
+        payload = {
+            'filters': json.loads(definition.filters_json or '{}'),
+            'sort': json.loads(definition.sort_json or '{}'),
+            'limit': data.get('limit')
+        }
+    else:
+        payload = data
+
+    if isinstance(payload, dict) and not screener_id:
+        filters_payload = payload.get('filters') if isinstance(payload.get('filters'), dict) else payload
+        if filters_payload.get('watchlist_id') in (None, '', 0):
+            filters_payload['watchlist_id'] = default_watchlist.id
+
+    try:
+        normalized = normalize_screener_payload(payload)
+        if normalized['filters'].get('watchlist_id'):
+            result = run_watchlist_cached_screener(dashboard_id, payload)
+        else:
+            result = run_cached_screener_query(payload)
+        return jsonify(result)
+    except TradingViewScreenerError as exc:
+        return jsonify({'error': str(exc)}), 400
 
 
 # AI Processing Endpoints
@@ -2284,7 +4345,6 @@ def analytics_query(dashboard_id):
     data = request.get_json() or {}
     prompt = data.get('prompt', '')
     session_id = data.get('session_id')
-    parsed = parse_analytics_prompt(prompt)
     now_ts = datetime.utcnow()
     
     # Load or create analytics session
@@ -2310,241 +4370,24 @@ def analytics_query(dashboard_id):
         db.session.add(analytics_session)
         db.session.commit()
 
-    multi_categories = parsed.get('categories', [])
-    use_multi_series = len(multi_categories) > 1 and parsed['chart_type'] != 'pie'
-
-    # Always try AI-generated SQL first; fall back to deterministic if missing/invalid
-    ai_plan = generate_ai_analytics_sql(member.user, prompt)
-    if ai_plan:
-        logger.debug("Analytics AI plan received", extra={'plan': ai_plan, 'dashboard_id': dashboard_id, 'user_id': session['user_id']})
-    if ai_plan:
-        try:
-            sql_text = ai_plan['sql'].replace('{dashboard_id}', str(dashboard_id))
-            # Normalize table name if AI returns plural
-            table_name = Expense.__tablename__
-            sql_text = sql_text.replace(' expenses', f' {table_name}').replace('Expenses', table_name).replace('Expenses', table_name)
-            if not validate_safe_sql(sql_text):
-                raise ValueError("Unsafe SQL detected")
-            results = db.session.execute(text(sql_text)).all()
-            labels = []
-            rows = []
-            datasets = []
-            data_points = []
-
-            # Detect multi-series or category/month pivot
-            if results:
-                keys = list(results[0]._mapping.keys())
-                has_month = any(k.lower() == 'month' for k in keys)
-                # Special case: category + month + single value column
-                if has_month and any(k.lower() in ['label', 'category'] for k in keys):
-                    label_key = next((k for k in keys if k.lower() == 'month'), keys[0])
-                    category_key = next((k for k in keys if k.lower() in ['label', 'category']), None)
-                    value_keys = [k for k in keys if k not in [label_key, category_key] and k.lower() != 'month']
-                    if not value_keys and len(keys) >= 3:
-                        # Assume third column is value
-                        value_keys = [k for k in keys if k not in [label_key, category_key]][:1]
-                    month_set = set()
-                    category_set = set()
-                    series_map = {}
-                    for r in results:
-                        month_val = getattr(r, label_key)
-                        cat_val = getattr(r, category_key) if category_key else 'series'
-                        month_set.add(month_val)
-                        category_set.add(cat_val)
-                        if cat_val not in series_map:
-                            series_map[cat_val] = {}
-                        for vk in value_keys:
-                            raw_val = getattr(r, vk)
-                            try:
-                                series_map[cat_val][month_val] = float(raw_val or 0)
-                            except (TypeError, ValueError):
-                                series_map[cat_val][month_val] = 0.0
-                    labels = sorted(month_set)
-                    datasets = []
-                    for cat in sorted(category_set):
-                        data_series = []
-                        for m in labels:
-                            data_series.append(series_map.get(cat, {}).get(m, 0.0))
-                        datasets.append({'label': cat, 'data': data_series})
-                    rows = []
-                    for m in labels:
-                        row_obj = {'label': m}
-                        for ds in datasets:
-                            row_obj[ds['label']] = series_map.get(ds['label'], {}).get(m, 0.0)
-                        rows.append(row_obj)
-                # Multi-aggregate columns -> datasets per aggregate
-                elif len(keys) > 2:
-                    label_key = next((k for k in keys if k.lower() == 'label'), keys[0])
-                    value_keys = [k for k in keys if k != label_key]
-                    series_data = {k: [] for k in value_keys}
-                    for r in results:
-                        labels.append(getattr(r, label_key))
-                        for k in value_keys:
-                            raw_val = getattr(r, k)
-                            try:
-                                series_data[k].append(float(raw_val or 0))
-                            except (TypeError, ValueError):
-                                series_data[k].append(0.0)
-                    datasets = [{'label': k, 'data': series_data[k]} for k in value_keys]
-                    for idx, lbl in enumerate(labels):
-                        row_obj = {'label': lbl}
-                        for k in value_keys:
-                            row_obj[k] = series_data[k][idx]
-                        rows.append(row_obj)
-                else:
-                    for r in results:
-                        label = r[0]
-                        value = float(r[1]) if len(r) > 1 else 0.0
-                        labels.append(label)
-                        data_points.append(value)
-                        rows.append({'label': label, 'value': value})
-            
-            # Map AI chart_type to our supported types
-            ctype = ai_plan.get('chart_type', 'bar')
-            if ctype not in ['bar', 'pie', 'table', 'line']:
-                ctype = 'bar'
-            # If we have multiple value series, prefer line chart
-            if datasets and ctype != 'pie':
-                ctype = 'line'
-            
-            if ctype == 'table' and datasets:
-                # Prefer a chart when datasets are present
-                ctype = 'line'
-
-            if ctype == 'table':
-                resp = {
-                    'chart_type': 'table',
-                    'rows': rows if rows else [{'label': lbl, 'value': val} for lbl, val in zip(labels, data_points)],
-                    'summary': ai_plan.get('summary', ''),
-                    'session_id': analytics_session.session_id
-                }
-            else:
-                resp = {
-                    'chart_type': 'line' if datasets else ctype,
-                    'labels': labels,
-                    'data': data_points if not datasets else None,
-                    'datasets': datasets if datasets else None,
-                    'summary': ai_plan.get('summary', ''),
-                    'session_id': analytics_session.session_id
-                }
-            analytics_session.add_entry('user', prompt)
-            analytics_session.add_entry('assistant', resp.get('summary', ''))
-            analytics_session.expires_at = now_ts + timedelta(hours=1)
-            db.session.commit()
-            return jsonify(resp)
-        except Exception as e:
-            logger.warning(f"AI analytics fallback due to error: {e}")
-            # Fall through to deterministic parsing
-    else:
-        logger.debug("Analytics AI plan missing or AI disabled", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
-    
-    # Deterministic fallback
-    query = Expense.query.filter_by(dashboard_id=dashboard_id)
-    
-    # Filter years if provided
-    if parsed['years']:
-        query = query.filter(db.func.strftime('%Y', Expense.date).in_(parsed['years']))
-    
-    # Filter category if specified
-    if parsed['category']:
-        query = query.filter(db.func.lower(Expense.category) == parsed['category'].lower())
-    elif use_multi_series and multi_categories:
-        query = query.filter(db.func.lower(Expense.category).in_([c.lower() for c in multi_categories]))
-    
-    if parsed['chart_type'] == 'pie':
-        results = query.with_entities(
-            Expense.category.label('category'),
-            db.func.sum(Expense.amount).label('total')
-        ).group_by(Expense.category).all()
-        
-        labels = [r.category for r in results]
-        data_points = [float(r.total) for r in results]
-        year_text = ''
-        if parsed['years']:
-            year_text = ' for ' + ', '.join(parsed['years'])
-        summary = f"Category breakdown{year_text}"
-        return jsonify({
-            'chart_type': 'pie',
-            'labels': labels,
-            'data': data_points,
-            'summary': summary
-        })
-    elif parsed['chart_type'] == 'table':
-        if parsed['category']:
-            # Table by month for the category
-            results = query.with_entities(
-                db.func.strftime('%Y-%m', Expense.date).label('month'),
-                db.func.sum(Expense.amount).label('total')
-            ).group_by('month').order_by('month').all()
-            rows = [{'label': r.month, 'value': float(r.total)} for r in results]
-            summary = f"Table for {parsed['category']} by month"
-        else:
-            results = query.with_entities(
-                Expense.category.label('category'),
-                db.func.sum(Expense.amount).label('total')
-            ).group_by(Expense.category).order_by(Expense.category).all()
-            rows = [{'label': r.category, 'value': float(r.total)} for r in results]
-            summary = "Table of category totals"
-        return jsonify({
-            'chart_type': 'table',
-            'rows': rows,
-            'summary': summary
-        })
-    else:
-        # Default to bar trend by month
-        if use_multi_series and multi_categories:
-            # Pivot by category per month
-            results = query.with_entities(
-                db.func.strftime('%Y-%m', Expense.date).label('month'),
-                db.func.lower(Expense.category).label('category'),
-                db.func.sum(Expense.amount).label('total')
-            ).group_by('month', 'category').order_by('month').all()
-
-            months = sorted({r.month for r in results})
-            cat_set = sorted({r.category for r in results})
-            datasets = []
-            for cat in cat_set:
-                cat_data = []
-                for m in months:
-                    val = next((float(r.total) for r in results if r.month == m and r.category == cat), 0.0)
-                    cat_data.append(val)
-                datasets.append({'label': cat, 'data': cat_data})
-
-            summary = f"Trend by month for categories: {', '.join(cat_set)}"
-            resp = {
-                'chart_type': 'line',
-                'labels': months,
-                'datasets': datasets,
-                'summary': summary,
-                'session_id': analytics_session.session_id
-            }
-            analytics_session.add_entry('user', prompt)
-            analytics_session.add_entry('assistant', summary)
-            analytics_session.expires_at = now_ts + timedelta(hours=1)
-            db.session.commit()
-            return jsonify(resp)
-        else:
-            results = query.with_entities(
-                db.func.strftime('%Y-%m', Expense.date).label('month'),
-                db.func.sum(Expense.amount).label('total')
-            ).group_by('month').order_by('month').all()
-            
-            labels = [r.month for r in results]
-            data_points = [float(r.total) for r in results]
-            cat_label = parsed['category'] or 'all categories'
-            summary = f"Trend for {cat_label} by month"
-            resp = {
-                'chart_type': 'bar',
-                'labels': labels,
-                'data': data_points,
-                'summary': summary,
-                'session_id': analytics_session.session_id
-            }
-            analytics_session.add_entry('user', prompt)
-            analytics_session.add_entry('assistant', summary)
-            analytics_session.expires_at = now_ts + timedelta(hours=1)
-            db.session.commit()
-            return jsonify(resp)
+    try:
+        resp = run_expense_analytics_agent(
+            dashboard_id=dashboard_id,
+            prompt=prompt,
+            user_id=session['user_id']
+        )
+        resp['session_id'] = analytics_session.session_id
+        analytics_session.add_entry('user', prompt)
+        analytics_session.add_entry('assistant', resp.get('summary', ''), summary=resp.get('request_type'))
+        analytics_session.expires_at = now_ts + timedelta(hours=1)
+        db.session.commit()
+        return jsonify(resp)
+    except Exception as exc:
+        logger.exception(
+            "Expense analytics agent failed",
+            extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']}
+        )
+        return jsonify({'error': f'Failed to analyze expenses: {exc}'}), 500
 
 @app.route('/api/dashboard/<int:dashboard_id>/analytics/session/<string:session_id>', methods=['DELETE'])
 def cancel_analytics_session(dashboard_id, session_id):

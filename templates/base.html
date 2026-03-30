@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Expense Tracker{% endblock %}</title>
+    <title>{% block title %}Finance Workspace{% endblock %}</title>
     <meta name="csrf-token" content="{{ csrf_token() }}">
     
     <!-- Fonts & Icons -->
@@ -43,8 +43,18 @@
                     <ul class="navbar-nav ms-auto align-items-lg-center gap-lg-2">
                         {% if session.user %}
                         <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('index') }}">
+                                <i class="fas fa-table-cells-large me-1"></i>Workspaces
+                            </a>
+                        </li>
+                        <li class="nav-item">
                             <a class="nav-link" href="{{ url_for('dashboard_list') }}">
-                                <i class="fas fa-table-cells-large me-1"></i>Dashboards
+                                <i class="fas fa-wallet me-1"></i>Expenses
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('investing_list') }}">
+                                <i class="fas fa-chart-line me-1"></i>Investing
                             </a>
                         </li>
                         {% endif %}
@@ -56,7 +66,7 @@
                                 <span class="d-none d-lg-inline">{{ session.user.name }}</span>
                             </a>
                             <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-                                <li><a class="dropdown-item" href="{{ url_for('settings') }}">
+                                <li><a class="dropdown-item" href="{{ url_for('settings', next=request.path) }}">
                                     <i class="fas fa-gear me-2"></i>Settings
                                 </a></li>
                                 <li><hr class="dropdown-divider"></li>
@@ -104,8 +114,8 @@
         <div class="container d-flex flex-column flex-lg-row align-items-center justify-content-between">
             <div class="d-flex align-items-center mb-3 mb-lg-0">
                 <span class="footer-dot me-2"></span>
-                <span class="fw-semibold">Expense Tracker</span>
-                <span class="text-muted ms-2">Privacy-first spending workspace</span>
+                <span class="fw-semibold">Finance Workspace</span>
+                <span class="text-muted ms-2">Expenses and investing in one app</span>
             </div>
             <div class="d-flex gap-3 small">
                 <span class="text-muted">Secure by design</span>

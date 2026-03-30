@@ -783,6 +783,9 @@ class DashboardManager {
         this.analyticsTable = document.getElementById('analyticsTable');
         this.analyticsTableInner = document.getElementById('analyticsTableInner');
         this.analyticsChartWrapper = document.getElementById('analyticsChartWrapper');
+        this.analyticsFindings = document.getElementById('analyticsFindings');
+        this.analyticsWarnings = document.getElementById('analyticsWarnings');
+        this.analyticsTrace = document.getElementById('analyticsTrace');
 
         const promptInput = document.getElementById('analyticsPrompt');
         const sendBtn = document.getElementById('analyticsSend');
@@ -845,6 +848,18 @@ class DashboardManager {
         if (this.analyticsChartWrapper) {
             this.analyticsChartWrapper.classList.remove('d-none');
         }
+        if (this.analyticsFindings) {
+            this.analyticsFindings.classList.add('d-none');
+            this.analyticsFindings.innerHTML = '';
+        }
+        if (this.analyticsWarnings) {
+            this.analyticsWarnings.classList.add('d-none');
+            this.analyticsWarnings.innerHTML = '';
+        }
+        if (this.analyticsTrace) {
+            this.analyticsTrace.classList.add('d-none');
+            this.analyticsTrace.textContent = '';
+        }
     }
 
     async handleAnalyticsPrompt() {
@@ -885,7 +900,7 @@ class DashboardManager {
             this.analyticsChart = null;
         }
 
-        const { chart_type, labels, data, summary, rows, datasets } = payload;
+        const { chart_type, labels, data, summary, rows, datasets, findings, critic, trace } = payload;
 
         // Toggle views
         if (this.analyticsChartWrapper) {
@@ -896,16 +911,32 @@ class DashboardManager {
         }
 
         if (chart_type === 'table' && this.analyticsTableInner) {
-            const headers = ['Label', 'Total'];
-            let html = `<thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>`;
-            (rows || []).forEach(r => {
-                html += `<tr><td>${r.label}</td><td>${Utils.formatCurrency(r.value)}</td></tr>`;
+            const rowData = rows || [];
+            const headers = rowData.length ? Object.keys(rowData[0]) : ['label', 'value'];
+            let html = `<thead><tr>${headers.map(h => `<th>${Utils.escapeHtml(h.replace(/_/g, ' '))}</th>`).join('')}</tr></thead><tbody>`;
+            rowData.forEach(r => {
+                html += '<tr>';
+                headers.forEach((header) => {
+                    const value = r[header];
+                    let formatted;
+                    if (typeof value === 'number') {
+                        const moneyLike = /amount|value|total|delta|current|prior/i.test(header);
+                        formatted = moneyLike
+                            ? Utils.formatCurrency(value)
+                            : Utils.escapeHtml(value.toString());
+                    } else {
+                        formatted = Utils.escapeHtml(String(value ?? ''));
+                    }
+                    html += `<td>${formatted}</td>`;
+                });
+                html += '</tr>';
             });
             html += '</tbody>';
             this.analyticsTableInner.innerHTML = html;
             if (this.analyticsSummary) {
                 this.analyticsSummary.textContent = summary || '';
             }
+            this.renderAnalyticsInsights(findings, critic, trace);
             return;
         }
 
@@ -944,7 +975,7 @@ class DashboardManager {
         }
 
         this.analyticsChart = new Chart(this.analyticsCtx, {
-            type: chart_type === 'pie' ? 'pie' : 'line',
+            type: chart_type === 'pie' ? 'pie' : (chart_type === 'bar' ? 'bar' : 'line'),
             data: {
                 labels: labels || [],
                 datasets: finalDatasets
@@ -969,6 +1000,53 @@ class DashboardManager {
 
         if (this.analyticsSummary) {
             this.analyticsSummary.textContent = summary || '';
+        }
+        this.renderAnalyticsInsights(findings, critic, trace);
+    }
+
+    renderAnalyticsInsights(findings, critic, trace) {
+        if (this.analyticsFindings) {
+            if (findings && findings.length) {
+                const cards = findings.map((finding) => `
+                    <div class="border rounded-3 p-3 mb-2 bg-light">
+                        <div class="fw-semibold mb-1">${Utils.escapeHtml(finding.title || 'Finding')}</div>
+                        <div class="small text-muted">${Utils.escapeHtml(finding.detail || '')}</div>
+                    </div>
+                `).join('');
+                this.analyticsFindings.innerHTML = `<div class="fw-semibold small text-uppercase text-muted mb-2">Key Findings</div>${cards}`;
+                this.analyticsFindings.classList.remove('d-none');
+            } else {
+                this.analyticsFindings.classList.add('d-none');
+                this.analyticsFindings.innerHTML = '';
+            }
+        }
+
+        if (this.analyticsWarnings) {
+            const warnings = (critic && critic.warnings) || [];
+            if (warnings.length) {
+                const items = warnings.map((warning) => `<li>${Utils.escapeHtml(warning)}</li>`).join('');
+                this.analyticsWarnings.innerHTML = `
+                    <div class="alert alert-warning mb-0">
+                        <div class="fw-semibold mb-1">Caveats</div>
+                        <ul class="mb-0 ps-3">${items}</ul>
+                    </div>
+                `;
+                this.analyticsWarnings.classList.remove('d-none');
+            } else {
+                this.analyticsWarnings.classList.add('d-none');
+                this.analyticsWarnings.innerHTML = '';
+            }
+        }
+
+        if (this.analyticsTrace) {
+            const tools = (trace && trace.tools_used) || [];
+            if (tools.length) {
+                this.analyticsTrace.textContent = `Trace: ${tools.join(' -> ')}`;
+                this.analyticsTrace.classList.remove('d-none');
+            } else {
+                this.analyticsTrace.classList.add('d-none');
+                this.analyticsTrace.textContent = '';
+            }
         }
     }
 

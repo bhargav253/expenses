@@ -1,0 +1,1253 @@
+{% extends "base.html" %}
+
+{% block title %}{{ dashboard.name }} - Investing Workspace{% endblock %}
+
+{% block extra_css %}
+<link href="https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css" rel="stylesheet">
+<style nonce="{{ csp_nonce() }}">
+    .dataTables_wrapper .dataTables_filter input {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0.55rem 0.95rem;
+        background: #fff;
+        color: var(--brand-deep);
+        box-shadow: none;
+        margin-left: 0.5rem;
+    }
+
+    .dataTables_wrapper .dataTables_filter input:focus {
+        outline: none;
+        border-color: rgba(65, 84, 241, 0.35);
+        box-shadow: 0 0 0 0.18rem rgba(65, 84, 241, 0.12);
+    }
+
+    .inline-thesis-editor {
+        min-width: 220px;
+    }
+
+    .inline-thesis-editor textarea {
+        min-height: 74px;
+        resize: vertical;
+    }
+
+    .screener-sidebar {
+        border-right: 1px solid rgba(15, 23, 42, 0.08);
+    }
+
+    .screener-criteria-list {
+        display: grid;
+        gap: 0.85rem;
+    }
+
+    .screener-criterion-card {
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 0.85rem;
+        padding: 0.9rem;
+        background: #fff;
+    }
+
+    .screener-band-grid {
+        display: grid;
+        gap: 0.45rem;
+        margin-top: 0.75rem;
+    }
+
+    .screener-criterion-empty {
+        border: 1px dashed rgba(15, 23, 42, 0.16);
+        border-radius: 0.85rem;
+        padding: 1rem;
+        color: #64748b;
+        background: rgba(248, 250, 252, 0.9);
+    }
+
+    .watchlist-table-scroll {
+        max-height: 30rem;
+        overflow: auto;
+        position: relative;
+        --watchlist-filter-height: 3.25rem;
+        background: #fff;
+    }
+
+    .watchlist-table-scroll .dataTables_wrapper {
+        position: relative;
+    }
+
+    .watchlist-table-scroll .dataTables_filter {
+        position: sticky;
+        top: 0;
+        z-index: 4;
+        margin: 0;
+        padding: 0 0 0.75rem;
+        background: #fff;
+    }
+
+    .watchlist-table-scroll .dataTables_filter label {
+        display: inline-flex;
+        align-items: center;
+        background: #fff;
+        padding-top: 0.25rem;
+    }
+
+    .watchlist-table-scroll table.dataTable thead th,
+    .watchlist-table-scroll table.dataTable thead td {
+        position: sticky;
+        top: var(--watchlist-filter-height);
+        z-index: 3;
+        background: #fff;
+    }
+
+    .screener-results-scroll {
+        max-height: 34rem;
+        overflow: auto;
+        position: relative;
+        background: #fff;
+    }
+
+    .screener-results-shell {
+        position: relative;
+        min-height: 8rem;
+    }
+
+    .screener-loading-overlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(248, 250, 252, 0.78);
+        backdrop-filter: blur(1px);
+        z-index: 6;
+    }
+
+    .screener-loading-overlay.is-active {
+        display: flex;
+    }
+
+    .screener-loading-card {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.7rem;
+        padding: 0.8rem 1rem;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.96);
+        color: var(--brand-deep);
+        font-size: 0.92rem;
+        box-shadow: 0 12px 26px rgba(15, 23, 42, 0.08);
+    }
+
+    .screener-results-shell.is-loading .screener-results-scroll,
+    .screener-results-shell.is-loading #screenerResultsEmpty {
+        opacity: 0.4;
+        pointer-events: none;
+    }
+
+    .screener-results-scroll table.dataTable thead th,
+    .screener-results-scroll table.dataTable thead td {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        background: #fff;
+    }
+
+    .screener-cache-panel {
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 0.85rem;
+        padding: 0.9rem;
+        background: rgba(248, 250, 252, 0.9);
+    }
+
+    .hover-help {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.1rem;
+        height: 1.1rem;
+        border-radius: 999px;
+        background: rgba(65, 84, 241, 0.12);
+        color: var(--brand-primary);
+        font-size: 0.75rem;
+        font-weight: 700;
+        cursor: help;
+    }
+
+    .hover-help::after {
+        content: attr(data-help);
+        position: absolute;
+        left: calc(100% + 0.55rem);
+        top: 50%;
+        transform: translateY(-50%);
+        width: 220px;
+        padding: 0.6rem 0.75rem;
+        border-radius: 12px;
+        background: rgba(11, 31, 76, 0.96);
+        color: #fff;
+        font-size: 0.78rem;
+        line-height: 1.4;
+        box-shadow: 0 16px 30px rgba(11, 31, 76, 0.22);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.15s ease;
+        z-index: 20;
+    }
+
+    .hover-help:hover::after {
+        opacity: 1;
+    }
+
+    .investing-layout.is-tools-collapsed #workspaceToolsColumn {
+        flex: 0 0 1.6rem;
+        max-width: 1.6rem;
+        padding-right: 0;
+    }
+
+    .investing-layout.is-tools-collapsed #workspaceToolsColumn .tools-pane-content {
+        display: none;
+    }
+
+    .investing-layout.is-tools-collapsed #workspaceMainColumn {
+        flex: 0 0 calc(100% - 1.6rem);
+        max-width: calc(100% - 1.6rem);
+    }
+
+    .tools-pane-toggle {
+        width: 2rem;
+        height: 2rem;
+        padding: 0;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .tools-pane-reopen {
+        display: none;
+        position: sticky;
+        top: 0.25rem;
+        left: 0;
+        width: 2rem;
+        height: 2rem;
+        padding: 0;
+        border-radius: 999px;
+        align-items: center;
+        justify-content: center;
+        z-index: 7;
+        box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+    }
+
+    .investing-layout.is-tools-collapsed .tools-pane-reopen {
+        display: inline-flex;
+    }
+
+    @media (max-width: 1199.98px) {
+        .screener-sidebar {
+            border-right: 0;
+            border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+            padding-bottom: 1rem;
+            margin-bottom: 1rem;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center mb-4 gap-3">
+    <div>
+        <div class="text-uppercase small text-muted fw-semibold mb-2">Dashboard Workspace</div>
+        <h2 class="mb-1"><i class="fas fa-chart-line me-2"></i>{{ dashboard.name }} Investing</h2>
+        <p class="text-muted mb-0">Watchlists now use cached market snapshots. Screeners, trade ideas, and options workflows can layer on top from here.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('dashboard_view', dashboard_id=dashboard.id) }}" class="btn btn-outline-secondary">
+            <i class="fas fa-wallet me-1"></i>Expense Dashboard
+        </a>
+        <a href="{{ url_for('investing_list') }}" class="btn btn-primary">
+            <i class="fas fa-table-cells-large me-1"></i>All Investment Workspaces
+        </a>
+    </div>
+</div>
+
+<div class="row g-4 investing-layout" id="investingWorkspaceLayout">
+    <div class="col-xl-4" id="workspaceToolsColumn">
+        <div class="tools-pane-content">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-white d-flex align-items-center justify-content-between gap-2">
+                    <h5 class="mb-0"><i class="fas fa-plus-circle me-2 text-primary"></i>Create Watchlist</h5>
+                    <button type="button" class="btn btn-sm btn-outline-secondary tools-pane-toggle" id="workspaceToolsCollapseBtn" aria-label="Collapse tools panel" aria-expanded="true" title="Collapse tools panel">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                </div>
+                <div class="card-body">
+                    <form id="createWatchlistForm">
+                        <div class="mb-3">
+                            <label for="watchlistName" class="form-label">Name</label>
+                            <input type="text" class="form-control" id="watchlistName" maxlength="255" placeholder="Core Long-Term" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="watchlistDescription" class="form-label">Description</label>
+                            <textarea class="form-control" id="watchlistDescription" rows="3" placeholder="Why this watchlist exists"></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="fas fa-folder-plus me-1"></i>Create Watchlist
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-white">
+                    <h5 class="mb-0"><i class="fas fa-lightbulb me-2 text-primary"></i>Add Trade Idea</h5>
+                </div>
+                <div class="card-body">
+                    <form id="createTradeIdeaForm">
+                        <div class="mb-3">
+                            <label for="tradeIdeaSymbol" class="form-label">Symbol</label>
+                            <input type="text" class="form-control" id="tradeIdeaSymbol" maxlength="16" placeholder="NVDA" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="tradeIdeaTitle" class="form-label">Title</label>
+                            <input type="text" class="form-control" id="tradeIdeaTitle" maxlength="255" placeholder="Post-earnings pullback watch" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="tradeIdeaType" class="form-label">Type</label>
+                            <select class="form-select" id="tradeIdeaType">
+                                <option value="watch">Watch</option>
+                                <option value="long">Long</option>
+                                <option value="short">Short</option>
+                                <option value="options">Options</option>
+                                <option value="avoid">Avoid</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="tradeIdeaThesis" class="form-label">Thesis</label>
+                            <textarea class="form-control" id="tradeIdeaThesis" rows="3" placeholder="Why this setup matters"></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-outline-primary w-100">
+                            <i class="fas fa-plus me-1"></i>Create Idea
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-header bg-white">
+                    <h6 class="mb-0"><i class="fas fa-robot me-2 text-primary"></i>Agentic Research Layer</h6>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">The next layer is a bounded research flow over cached watchlist context and market data, not a generic chat box.</p>
+                    <ol class="list-group list-group-numbered">
+                        <li class="list-group-item border-0 px-0">Classify the request</li>
+                        <li class="list-group-item border-0 px-0">Plan the research steps</li>
+                        <li class="list-group-item border-0 px-0">Call market and watchlist tools</li>
+                        <li class="list-group-item border-0 px-0">Produce a structured report</li>
+                        <li class="list-group-item border-0 px-0">Run a critic pass and save the trace</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-8" id="workspaceMainColumn">
+        <button type="button" class="btn btn-sm btn-outline-secondary tools-pane-reopen" id="workspaceToolsExpandBtn" aria-label="Show tools panel" title="Show tools panel">
+            <i class="fas fa-chevron-right"></i>
+        </button>
+        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center mb-3 gap-2">
+            <div class="d-flex align-items-center gap-2">
+                <h5 class="mb-0"><i class="fas fa-filter me-2 text-primary"></i>Screeners</h5>
+                <span class="badge bg-light text-dark">{{ screeners|length }} saved</span>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <label class="small text-muted mb-0" for="selectedScreenerId">Selected</label>
+                <select class="form-select form-select-sm" id="selectedScreenerId" style="min-width: 240px;">
+                    {% for screener in screeners %}
+                    <option value="{{ screener.id }}" {% if selected_screener and screener.id == selected_screener.id %}selected{% endif %}>
+                        {{ screener.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-body">
+                <div class="row g-4">
+                    <div class="col-xl-4 screener-sidebar">
+                        <form id="screenerForm" class="d-grid gap-3">
+                            <div>
+                                <div class="fw-semibold d-flex align-items-center gap-2">
+                                    <span>Screener Criteria</span>
+                                    <span class="hover-help" data-help="Use up to 5 criteria. Each one further narrows the default watchlist.">?</span>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="form-label" for="screenerCriterionSelect">Add Criterion</label>
+                                <div class="d-flex gap-2">
+                                    <select class="form-select" id="screenerCriterionSelect">
+                                        <option value="">Choose criterion</option>
+                                        {% for criterion in screener_criteria %}
+                                        <option value="{{ criterion.id }}">{{ criterion.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <button type="button" class="btn btn-outline-primary" id="addScreenerCriterionBtn">Add</button>
+                                </div>
+                            </div>
+
+                            <div id="selectedCriteriaContainer" class="screener-criteria-list">
+                                <div class="screener-criterion-empty">No criteria selected yet. Add one to start pruning the universe.</div>
+                            </div>
+
+                            <div class="d-grid gap-2">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-magnifying-glass-chart me-1"></i>Run Screener
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary" id="saveScreenerBtn">
+                                    <i class="fas fa-floppy-disk me-1"></i>Save As New
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="col-xl-8">
+                        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2 mb-3">
+                            <div>
+                                <div class="fw-semibold">Screener Results</div>
+                                <div class="small text-muted" id="screenerRunMeta">No screener run yet.</div>
+                            </div>
+                            <div class="small text-muted" id="activeCriteriaMeta">0 active criteria</div>
+                        </div>
+
+                        <div class="screener-results-shell" id="screenerResultsShell">
+                            <div class="screener-loading-overlay" id="screenerLoadingOverlay">
+                                <div class="screener-loading-card">
+                                    <span class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></span>
+                                    <span>Running screener...</span>
+                                </div>
+                            </div>
+                            <div id="screenerResultsEmpty" class="text-muted small">No results yet. Run the screener to populate the table.</div>
+                            <div id="screenerResultsWrapper" class="table-responsive screener-results-scroll d-none">
+                                <table class="table table-striped table-hover align-middle mb-0" id="screenerResultsTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Symbol</th>
+                                            <th>Price</th>
+                                            <th id="screenerCriterionHeader1">Criterion 1</th>
+                                            <th id="screenerCriterionHeader2">Criterion 2</th>
+                                            <th id="screenerCriterionHeader3">Criterion 3</th>
+                                            <th id="screenerCriterionHeader4">Criterion 4</th>
+                                            <th id="screenerCriterionHeader5">Criterion 5</th>
+                                            <th>Add to Watchlist</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="screenerResultsBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center mb-3 gap-2">
+            <div class="d-flex align-items-center gap-2">
+                <h5 class="mb-0"><i class="fas fa-list me-2 text-primary"></i>Watchlist</h5>
+                <span class="badge bg-light text-dark" id="watchlistCount">{{ watchlists|length }} available</span>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <label class="small text-muted mb-0" for="selectedWatchlistId">Selected</label>
+                <select class="form-select form-select-sm" id="selectedWatchlistId" style="min-width: 240px;">
+                    {% for watchlist in watchlists %}
+                    <option value="{{ watchlist['id'] }}" {% if selected_watchlist and watchlist['id'] == selected_watchlist['id'] %}selected{% endif %}>
+                        {{ watchlist['name'] }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div id="watchlistsEmptyState" class="{% if selected_watchlist %}d-none{% endif %}">
+            <div class="card shadow-sm">
+                <div class="card-body text-center py-5">
+                    <i class="fas fa-binoculars fa-2x text-muted mb-3"></i>
+                    <h5>No watchlists yet</h5>
+                    <p class="text-muted mb-0">Create your first watchlist and start adding ticker symbols with cached market snapshots.</p>
+                </div>
+            </div>
+        </div>
+
+        <div id="watchlistsContainer" class="{% if not selected_watchlist %}d-none{% endif %}">
+            {% if selected_watchlist %}
+            {% set watchlist = selected_watchlist %}
+            <div class="card shadow-sm watchlist-card" data-watchlist-id="{{ watchlist['id'] }}">
+                <div class="card-header bg-white d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2">
+                    <div>
+                        <h5 class="mb-1">{{ watchlist['name'] }}</h5>
+                        <p class="text-muted small mb-0">{{ watchlist['description'] or 'No description yet.' }}</p>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-light text-dark">{{ watchlist['items']|length }} symbols</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <form class="addSymbolForm row g-2 mb-4" data-watchlist-id="{{ watchlist['id'] }}">
+                        <div class="col-md-9">
+                            <input type="text" class="form-control symbol-input" placeholder="AAPL" maxlength="16" required>
+                        </div>
+                        <div class="col-md-3 d-grid">
+                            <button type="submit" class="btn btn-outline-primary">
+                                <i class="fas fa-plus me-1"></i>Add Symbol
+                            </button>
+                        </div>
+                    </form>
+
+                    <div class="watchlist-items">
+                        {% if watchlist['items'] %}
+                        <div class="table-responsive watchlist-table-scroll">
+                            <table class="table table-striped table-hover align-middle watchlist-table" id="watchlist-table-{{ watchlist['id'] }}">
+                                <thead>
+                                    <tr>
+                                        <th>Ticker</th>
+                                        <th>Name</th>
+                                        <th>Price</th>
+                                        <th>1D</th>
+                                        <th>5D</th>
+                                        <th>12D</th>
+                                        <th>Market Cap</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for item in watchlist['items'] %}
+                                    {% set snapshot = item.snapshot %}
+                                    <tr>
+                                        <td class="fw-semibold">{{ item.symbol }}</td>
+                                        <td>{{ item.asset_name or 'Unknown asset' }}</td>
+                                        <td data-order="{{ snapshot.price if snapshot and snapshot.price is not none else -1 }}">
+                                            {{ "$%.2f"|format(snapshot.price) if snapshot and snapshot.price is not none else "N/A" }}
+                                        </td>
+                                        <td data-order="{{ snapshot.change_percent if snapshot and snapshot.change_percent is not none else -9999 }}">
+                                            {% if snapshot and snapshot.change_percent is not none %}
+                                            <span class="{{ 'text-success' if snapshot.change_percent >= 0 else 'text-danger' }}">
+                                                {{ "%.2f%%"|format(snapshot.change_percent) }}
+                                            </span>
+                                            {% else %}
+                                            N/A
+                                            {% endif %}
+                                        </td>
+                                        <td data-order="{{ snapshot.price_performance_5d if snapshot and snapshot.price_performance_5d is not none else -9999 }}">
+                                            {% if snapshot and snapshot.price_performance_5d is not none %}
+                                            <span class="{{ 'text-success' if snapshot.price_performance_5d >= 0 else 'text-danger' }}">
+                                                {{ "%.2f%%"|format(snapshot.price_performance_5d) }}
+                                            </span>
+                                            {% else %}
+                                            N/A
+                                            {% endif %}
+                                        </td>
+                                        <td data-order="{{ snapshot.price_performance_12d if snapshot and snapshot.price_performance_12d is not none else -9999 }}">
+                                            {% if snapshot and snapshot.price_performance_12d is not none %}
+                                            <span class="{{ 'text-success' if snapshot.price_performance_12d >= 0 else 'text-danger' }}">
+                                                {{ "%.2f%%"|format(snapshot.price_performance_12d) }}
+                                            </span>
+                                            {% else %}
+                                            N/A
+                                            {% endif %}
+                                        </td>
+                                        <td data-order="{{ snapshot.market_cap if snapshot and snapshot.market_cap is not none else -1 }}">
+                                            {{ "{:,.0f}".format(snapshot.market_cap) if snapshot and snapshot.market_cap is not none else "N/A" }}
+                                        </td>
+                                        <td>
+                                            <div class="d-flex gap-2">
+                                                <button class="btn btn-sm btn-outline-secondary refresh-asset-btn" data-symbol="{{ item.symbol }}">
+                                                    <i class="fas fa-rotate"></i>
+                                                </button>
+                                                <button class="btn btn-sm btn-outline-danger delete-watchlist-item-btn" data-watchlist-id="{{ watchlist['id'] }}" data-item-id="{{ item.id }}">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% else %}
+                        <div class="text-muted small">No symbols added yet.</div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center mt-5 mb-3">
+            <h5 class="mb-0"><i class="fas fa-bullseye me-2 text-primary"></i>Trade Ideas</h5>
+            <span class="badge bg-light text-dark">{{ trade_ideas|length }} ideas</span>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-body">
+                {% if trade_ideas %}
+                <div class="row g-3">
+                    {% for idea in trade_ideas %}
+                    <div class="col-md-6">
+                        <div class="border rounded-3 p-3 h-100">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <div>
+                                    <div class="fw-bold">{{ idea.title }}</div>
+                                    <div class="small text-muted">{{ idea.asset_symbol }}{% if idea.asset_name %} · {{ idea.asset_name }}{% endif %}</div>
+                                </div>
+                                <span class="badge bg-light text-dark text-uppercase">{{ idea.idea_type }}</span>
+                            </div>
+                            {% if idea.thesis_summary %}
+                            <div class="small text-muted mb-2">{{ idea.thesis_summary }}</div>
+                            {% endif %}
+                            <div class="small">
+                                <div><span class="text-muted">Status:</span> {{ idea.status }}</div>
+                                {% if idea.entry_zone %}<div><span class="text-muted">Entry:</span> {{ idea.entry_zone }}</div>{% endif %}
+                                {% if idea.target_1 %}<div><span class="text-muted">Target:</span> {{ idea.target_1 }}</div>{% endif %}
+                                {% if idea.invalidation %}<div><span class="text-muted">Invalidation:</span> {{ idea.invalidation }}</div>{% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="text-muted small">No trade ideas yet.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
+<script nonce="{{ csp_nonce() }}">
+    const investingDashboardId = {{ dashboard.id }};
+    const investingSavedScreeners = {{ screeners|tojson }};
+    const selectedInvestingScreener = {{ selected_screener|tojson }};
+    const investingScreenerCriteria = {{ screener_criteria|tojson }};
+    const defaultScreenerWatchlistId = {{ default_screener_watchlist_id|tojson }};
+    const selectedWatchlistId = {{ selected_watchlist['id'] if selected_watchlist else 'null' }};
+    const investingWatchlistChoices = [
+        {% for watchlist in watchlists %}
+        { id: {{ watchlist['id'] }}, name: {{ watchlist['name']|tojson }} }{% if not loop.last %},{% endif %}
+        {% endfor %}
+    ];
+    let screenerResultsDataTable = null;
+
+    const InvestingApi = {
+        createWatchlist(data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/watchlists`, {
+                method: 'POST',
+                body: data
+            });
+        },
+        setSelectedScreener(data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/screener-selection`, {
+                method: 'PUT',
+                body: data
+            });
+        },
+        setSelectedWatchlist(data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/watchlist-selection`, {
+                method: 'PUT',
+                body: data
+            });
+        },
+        addSymbol(watchlistId, data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/watchlists/${watchlistId}/items`, {
+                method: 'POST',
+                body: data
+            });
+        },
+        deleteSymbol(watchlistId, itemId) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/watchlists/${watchlistId}/items/${itemId}`, {
+                method: 'DELETE'
+            });
+        },
+        updateSymbol(watchlistId, itemId, data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/watchlists/${watchlistId}/items/${itemId}`, {
+                method: 'PUT',
+                body: data
+            });
+        },
+        refreshSymbol(symbol) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/assets/${encodeURIComponent(symbol)}/refresh`, {
+                method: 'POST'
+            });
+        },
+        getAssetRefreshStatus(symbol) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/assets/${encodeURIComponent(symbol)}/refresh-status`);
+        },
+        createTradeIdea(data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-ideas`, {
+                method: 'POST',
+                body: data
+            });
+        },
+        saveScreener(data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/screeners`, {
+                method: 'POST',
+                body: data
+            });
+        },
+        runScreener(data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/screeners/run`, {
+                method: 'POST',
+                body: data
+            });
+        }
+    };
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const workspaceLayout = document.getElementById('investingWorkspaceLayout');
+        const workspaceToolsColumn = document.getElementById('workspaceToolsColumn');
+        const workspaceMainColumn = document.getElementById('workspaceMainColumn');
+        const workspaceToolsCollapseBtn = document.getElementById('workspaceToolsCollapseBtn');
+        const workspaceToolsExpandBtn = document.getElementById('workspaceToolsExpandBtn');
+        const createForm = document.getElementById('createWatchlistForm');
+        const createTradeIdeaForm = document.getElementById('createTradeIdeaForm');
+        const screenerForm = document.getElementById('screenerForm');
+        const saveScreenerBtn = document.getElementById('saveScreenerBtn');
+        const selectedScreenerIdSelect = document.getElementById('selectedScreenerId');
+        const selectedWatchlistIdSelect = document.getElementById('selectedWatchlistId');
+        const screenerResultsShell = document.getElementById('screenerResultsShell');
+        const screenerLoadingOverlay = document.getElementById('screenerLoadingOverlay');
+        const screenerResultsEmpty = document.getElementById('screenerResultsEmpty');
+        const screenerResultsWrapper = document.getElementById('screenerResultsWrapper');
+        const screenerResultsBody = document.getElementById('screenerResultsBody');
+        const screenerRunMeta = document.getElementById('screenerRunMeta');
+        const screenerCriterionHeaders = [
+            document.getElementById('screenerCriterionHeader1'),
+            document.getElementById('screenerCriterionHeader2'),
+            document.getElementById('screenerCriterionHeader3'),
+            document.getElementById('screenerCriterionHeader4'),
+            document.getElementById('screenerCriterionHeader5')
+        ];
+        const activeCriteriaMeta = document.getElementById('activeCriteriaMeta');
+        const screenerCriterionSelect = document.getElementById('screenerCriterionSelect');
+        const addScreenerCriterionBtn = document.getElementById('addScreenerCriterionBtn');
+        const selectedCriteriaContainer = document.getElementById('selectedCriteriaContainer');
+        const addSymbolForms = document.querySelectorAll('.addSymbolForm');
+        const refreshButtons = document.querySelectorAll('.refresh-asset-btn');
+        const deleteButtons = document.querySelectorAll('.delete-watchlist-item-btn');
+        const screenerCriteriaMap = new Map(investingScreenerCriteria.map((criterion) => [criterion.id, criterion]));
+        let activeScreenerCriteria = [];
+        const assetRefreshPollHandles = new Map();
+        const workspaceToolsStorageKey = 'investingWorkspaceToolsCollapsed';
+
+        function setWorkspaceToolsCollapsed(isCollapsed) {
+            if (!workspaceLayout || !workspaceToolsColumn || !workspaceMainColumn) {
+                return;
+            }
+            workspaceLayout.classList.toggle('is-tools-collapsed', isCollapsed);
+            workspaceMainColumn.classList.toggle('col-xl-8', !isCollapsed);
+            workspaceMainColumn.classList.toggle('col-xl-12', isCollapsed);
+            if (workspaceToolsCollapseBtn) {
+                workspaceToolsCollapseBtn.setAttribute('aria-expanded', String(!isCollapsed));
+            }
+            if (workspaceToolsExpandBtn) {
+                workspaceToolsExpandBtn.setAttribute('aria-expanded', String(isCollapsed));
+            }
+            window.localStorage.setItem(workspaceToolsStorageKey, isCollapsed ? 'true' : 'false');
+        }
+
+        const savedToolsState = window.localStorage.getItem(workspaceToolsStorageKey) === 'true';
+        setWorkspaceToolsCollapsed(savedToolsState);
+
+        if (workspaceToolsCollapseBtn) {
+            workspaceToolsCollapseBtn.addEventListener('click', () => {
+                setWorkspaceToolsCollapsed(true);
+            });
+        }
+
+        if (workspaceToolsExpandBtn) {
+            workspaceToolsExpandBtn.addEventListener('click', () => {
+                setWorkspaceToolsCollapsed(false);
+            });
+        }
+
+        function cloneCriteria(criteria = []) {
+            return criteria.map((criterion) => ({
+                criterion_id: criterion.criterion_id,
+                selected_band_ids: [...(criterion.selected_band_ids || [])],
+                query: criterion.query || ''
+            }));
+        }
+
+        function screenerPayloadFromForm() {
+            return {
+                filters: {
+                    watchlist_id: defaultScreenerWatchlistId,
+                    criteria: cloneCriteria(activeScreenerCriteria)
+                }
+            };
+        }
+
+        function populateScreenerForm(definition) {
+            const filters = (definition && definition.filters) || {};
+            activeScreenerCriteria = cloneCriteria(filters.criteria || []);
+            renderSelectedCriteria();
+        }
+
+        function renderSelectedCriteria() {
+            selectedCriteriaContainer.innerHTML = '';
+            activeCriteriaMeta.textContent = `${activeScreenerCriteria.length} active criteria`;
+
+            if (!activeScreenerCriteria.length) {
+                selectedCriteriaContainer.innerHTML = '<div class="screener-criterion-empty">No criteria selected yet. Add one to start pruning the universe.</div>';
+                return;
+            }
+
+            activeScreenerCriteria.forEach((criterionState, index) => {
+                const criterion = screenerCriteriaMap.get(criterionState.criterion_id);
+                if (!criterion) return;
+
+                const card = document.createElement('div');
+                card.className = 'screener-criterion-card';
+
+                let bodyHtml = '';
+                if (criterion.type === 'text') {
+                    bodyHtml = `
+                        <input
+                            type="text"
+                            class="form-control criterion-text-input"
+                            data-criterion-index="${index}"
+                            value="${Utils.escapeHtml ? Utils.escapeHtml(criterionState.query || '') : (criterionState.query || '').replace(/"/g, '&quot;')}"
+                            placeholder="Type an industry filter"
+                        >
+                    `;
+                } else {
+                    bodyHtml = `
+                        <div class="screener-band-grid">
+                            ${criterion.bands.map((band) => `
+                                <label class="form-check mb-0">
+                                    <input
+                                        class="form-check-input criterion-band-checkbox"
+                                        type="checkbox"
+                                        data-criterion-index="${index}"
+                                        value="${band.id}"
+                                        ${criterionState.selected_band_ids.includes(band.id) ? 'checked' : ''}
+                                    >
+                                    <span class="form-check-label">${band.label}</span>
+                                </label>
+                            `).join('')}
+                        </div>
+                    `;
+                }
+
+                card.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-start gap-2">
+                        <div>
+                            <div class="fw-semibold">${criterion.label}</div>
+                            <div class="small text-muted">Applied on top of the prior filters</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-danger remove-criterion-btn" data-criterion-index="${index}">
+                            Remove
+                        </button>
+                    </div>
+                    ${bodyHtml}
+                `;
+                selectedCriteriaContainer.appendChild(card);
+            });
+
+            selectedCriteriaContainer.querySelectorAll('.criterion-band-checkbox').forEach((checkbox) => {
+                checkbox.addEventListener('change', (event) => {
+                    const criterionIndex = Number(event.target.getAttribute('data-criterion-index'));
+                    const bandId = event.target.value;
+                    const selectedBandIds = new Set(activeScreenerCriteria[criterionIndex].selected_band_ids || []);
+                    if (event.target.checked) {
+                        selectedBandIds.add(bandId);
+                    } else {
+                        selectedBandIds.delete(bandId);
+                    }
+                    activeScreenerCriteria[criterionIndex].selected_band_ids = [...selectedBandIds];
+                });
+            });
+
+            selectedCriteriaContainer.querySelectorAll('.criterion-text-input').forEach((input) => {
+                input.addEventListener('input', (event) => {
+                    const criterionIndex = Number(event.target.getAttribute('data-criterion-index'));
+                    activeScreenerCriteria[criterionIndex].query = event.target.value;
+                });
+            });
+
+            selectedCriteriaContainer.querySelectorAll('.remove-criterion-btn').forEach((button) => {
+                button.addEventListener('click', () => {
+                    const criterionIndex = Number(button.getAttribute('data-criterion-index'));
+                    activeScreenerCriteria.splice(criterionIndex, 1);
+                    renderSelectedCriteria();
+                });
+            });
+        }
+
+        function formatNumber(value, options = {}) {
+            if (value === null || value === undefined || value === '') return 'N/A';
+            return new Intl.NumberFormat('en-US', options).format(value);
+        }
+
+        function formatPercent(value, digits = 2) {
+            if (value === null || value === undefined || value === '') return 'N/A';
+            return `${formatNumber(value, { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
+        }
+
+        function formatCriterionValue(criterionId, row) {
+            const valueMap = {
+                price: () => row.price !== null && row.price !== undefined ? `$${formatNumber(row.price, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A',
+                market_cap: () => formatNumber(row.market_cap, { maximumFractionDigits: 0 }),
+                industry: () => row.industry || 'N/A',
+                pe_ratio: () => row.pe_ratio !== null && row.pe_ratio !== undefined ? formatNumber(row.pe_ratio, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : 'N/A',
+                peg_ratio: () => row.peg_ratio !== null && row.peg_ratio !== undefined ? formatNumber(row.peg_ratio, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'N/A',
+                revenue: () => formatNumber(row.revenue, { maximumFractionDigits: 0 }),
+                dividend_yield: () => formatPercent(row.dividend_yield, 2),
+                today_change_percent: () => formatPercent(row.today_change_percent, 2),
+                percent_below_52_week_high: () => formatPercent(row.percent_below_52_week_high, 2),
+                percent_above_52_week_low: () => formatPercent(row.percent_above_52_week_low, 2),
+                days_since_52_week_high: () => row.days_since_52_week_high ?? 'N/A',
+                days_since_52_week_low: () => row.days_since_52_week_low ?? 'N/A',
+                total_return: () => formatPercent(row.total_return, 2),
+                annualized_return_1y: () => formatPercent(row.annualized_return_1y, 2),
+                annualized_return_3y: () => formatPercent(row.annualized_return_3y, 2),
+                annualized_return_5y: () => formatPercent(row.annualized_return_5y, 2),
+                annualized_return_10y: () => formatPercent(row.annualized_return_10y, 2),
+                price_performance_5d: () => formatPercent(row.price_performance_5d, 2),
+                price_performance_4w: () => formatPercent(row.price_performance_4w, 2),
+                price_performance_13w: () => formatPercent(row.price_performance_13w, 2),
+                price_performance_52w: () => formatPercent(row.price_performance_52w, 2),
+                percent_price_off_10day_sma: () => formatPercent(row.percent_price_off_10day_sma, 2),
+                percent_price_off_20day_sma: () => formatPercent(row.percent_price_off_20day_sma, 2),
+                percent_price_off_50day_sma: () => formatPercent(row.percent_price_off_50day_sma, 2),
+                percent_price_off_200day_sma: () => formatPercent(row.percent_price_off_200day_sma, 2)
+            };
+            return (valueMap[criterionId] || (() => 'N/A'))();
+        }
+
+        function updateScreenerCriterionHeaders() {
+            screenerCriterionHeaders.forEach((header, index) => {
+                const criterionState = activeScreenerCriteria[index];
+                const criterion = criterionState ? screenerCriteriaMap.get(criterionState.criterion_id) : null;
+                if (header) {
+                    header.textContent = criterion ? criterion.label : `Criterion ${index + 1}`;
+                }
+            });
+        }
+
+        function setScreenerLoading(isLoading) {
+            if (screenerResultsShell) {
+                screenerResultsShell.classList.toggle('is-loading', isLoading);
+            }
+            if (screenerLoadingOverlay) {
+                screenerLoadingOverlay.classList.toggle('is-active', isLoading);
+            }
+        }
+
+        function renderScreenerResults(payload) {
+            const results = payload.results || [];
+            setScreenerLoading(false);
+            updateScreenerCriterionHeaders();
+            if (window.jQuery && $.fn.DataTable && $.fn.DataTable.isDataTable('#screenerResultsTable')) {
+                $('#screenerResultsTable').DataTable().destroy();
+                screenerResultsDataTable = null;
+            }
+            screenerResultsBody.innerHTML = '';
+            if (!results.length) {
+                screenerResultsWrapper.classList.add('d-none');
+                screenerResultsEmpty.classList.remove('d-none');
+                screenerResultsEmpty.textContent = 'No watchlist symbols matched the current screener filters.';
+                screenerRunMeta.textContent = `0 matches out of ${payload.total_matches || 0} watchlist symbols.`;
+                return;
+            }
+
+            results.forEach((row) => {
+                const tr = document.createElement('tr');
+                const todayChange = row.today_change_percent;
+                const changeClass = todayChange === null || todayChange === undefined ? '' : (todayChange >= 0 ? 'text-success' : 'text-danger');
+                const watchlistOptions = investingWatchlistChoices.map((watchlist) => (
+                    `<option value="${watchlist.id}">${watchlist.name}</option>`
+                )).join('');
+                const criterionCells = Array.from({ length: 5 }, (_, index) => {
+                    const criterionState = activeScreenerCriteria[index];
+                    return `<td>${criterionState ? formatCriterionValue(criterionState.criterion_id, row) : 'N/A'}</td>`;
+                }).join('');
+                tr.innerHTML = `
+                    <td class="fw-semibold">${row.symbol || 'N/A'}</td>
+                    <td>${row.price !== null && row.price !== undefined ? '$' + formatNumber(row.price, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'N/A'}</td>
+                    ${criterionCells}
+                    <td>
+                        ${investingWatchlistChoices.length ? `
+                        <div class="d-flex gap-2">
+                            <select class="form-select form-select-sm screener-watchlist-select">${watchlistOptions}</select>
+                            <button type="button" class="btn btn-sm btn-outline-primary screener-add-to-watchlist-btn" data-symbol="${row.symbol}">
+                                Add
+                            </button>
+                        </div>` : '<span class="text-muted small">Create a watchlist first</span>'}
+                    </td>
+                `;
+                screenerResultsBody.appendChild(tr);
+            });
+
+            screenerResultsEmpty.classList.add('d-none');
+            screenerResultsWrapper.classList.remove('d-none');
+            const watchlistName = payload.watchlist && payload.watchlist.name ? payload.watchlist.name : 'watchlist';
+            screenerRunMeta.textContent = `${results.length} results shown out of ${payload.total_matches || results.length} symbols from ${watchlistName}.`;
+
+            if (window.jQuery && $.fn.DataTable) {
+                try {
+                    screenerResultsDataTable = $('#screenerResultsTable').DataTable({
+                        destroy: true,
+                        paging: false,
+                        info: false,
+                        searching: false,
+                        order: [],
+                        columnDefs: [
+                            { orderable: false, targets: [7] }
+                        ]
+                    });
+                } catch (error) {
+                    screenerResultsDataTable = null;
+                    console.error('Failed to initialize screener results DataTable', error);
+                }
+            }
+
+            screenerResultsBody.querySelectorAll('.screener-add-to-watchlist-btn').forEach((button) => {
+                button.addEventListener('click', async () => {
+                    const symbol = button.getAttribute('data-symbol');
+                    const select = button.closest('td').querySelector('.screener-watchlist-select');
+                    const watchlistId = select ? select.value : '';
+                    if (!watchlistId) {
+                        Utils.showNotification('Choose a watchlist first', 'warning');
+                        return;
+                    }
+
+                    try {
+                        await InvestingApi.addSymbol(watchlistId, { symbol });
+                        Utils.showNotification(`Added ${symbol} to watchlist`, 'success');
+                    } catch (error) {
+                        Utils.showNotification(error.message || 'Failed to add symbol', 'danger');
+                    }
+                });
+            });
+        }
+
+        if (window.jQuery && $.fn.DataTable) {
+            $('.watchlist-table').each(function() {
+                $(this).DataTable({
+                    paging: false,
+                    info: false,
+                    order: [[6, 'desc']],
+                    columnDefs: [
+                        { orderable: false, targets: [7] }
+                    ],
+                    language: {
+                        searchPlaceholder: 'Ticker or company name'
+                    }
+                });
+            });
+        }
+
+        if (selectedScreenerIdSelect) {
+            selectedScreenerIdSelect.addEventListener('change', async () => {
+                try {
+                    await InvestingApi.setSelectedScreener({ screener_id: selectedScreenerIdSelect.value });
+                    window.location.reload();
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to update selected screener', 'danger');
+                }
+            });
+        }
+
+        if (screenerForm) {
+            screenerForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                setScreenerLoading(true);
+                try {
+                    const result = await InvestingApi.runScreener(screenerPayloadFromForm());
+                    renderScreenerResults(result);
+                } catch (error) {
+                    setScreenerLoading(false);
+                    console.error('Screener run/render failed', error);
+                    Utils.showNotification(error.message || 'Failed to run screener', 'danger');
+                }
+            });
+        }
+
+        if (addScreenerCriterionBtn) {
+            addScreenerCriterionBtn.addEventListener('click', () => {
+                const criterionId = screenerCriterionSelect.value;
+                if (!criterionId) {
+                    Utils.showNotification('Choose a criterion first', 'warning');
+                    return;
+                }
+                if (activeScreenerCriteria.length >= 5) {
+                    Utils.showNotification('Use at most 5 criteria at a time', 'warning');
+                    return;
+                }
+                if (activeScreenerCriteria.some((criterion) => criterion.criterion_id === criterionId)) {
+                    Utils.showNotification('That criterion is already active', 'warning');
+                    return;
+                }
+                activeScreenerCriteria.push({
+                    criterion_id: criterionId,
+                    selected_band_ids: [],
+                    query: ''
+                });
+                screenerCriterionSelect.value = '';
+                renderSelectedCriteria();
+            });
+        }
+
+        if (saveScreenerBtn) {
+            saveScreenerBtn.addEventListener('click', async () => {
+                const name = window.prompt('Screener name');
+                if (!name || !name.trim()) {
+                    return;
+                }
+                const description = window.prompt('Description (optional)') || '';
+                try {
+                    await InvestingApi.saveScreener({
+                        name: name.trim(),
+                        description: description.trim(),
+                        ...screenerPayloadFromForm()
+                    });
+                    Utils.showNotification('Screener saved', 'success');
+                    window.location.reload();
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to save screener', 'danger');
+                }
+            });
+        }
+
+        if (createForm) {
+            createForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const name = document.getElementById('watchlistName').value.trim();
+                const description = document.getElementById('watchlistDescription').value.trim();
+                if (!name) {
+                    Utils.showNotification('Watchlist name is required', 'warning');
+                    return;
+                }
+
+                try {
+                    await InvestingApi.createWatchlist({ name, description });
+                    Utils.showNotification('Watchlist created', 'success');
+                    window.location.reload();
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to create watchlist', 'danger');
+                }
+            });
+        }
+
+        if (selectedWatchlistIdSelect) {
+            selectedWatchlistIdSelect.addEventListener('change', async () => {
+                try {
+                    await InvestingApi.setSelectedWatchlist({ watchlist_id: selectedWatchlistIdSelect.value });
+                    window.location.reload();
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to update selected watchlist', 'danger');
+                }
+            });
+        }
+
+        populateScreenerForm(selectedInvestingScreener);
+
+        if (createTradeIdeaForm) {
+            createTradeIdeaForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const symbol = document.getElementById('tradeIdeaSymbol').value.trim();
+                const title = document.getElementById('tradeIdeaTitle').value.trim();
+                const ideaType = document.getElementById('tradeIdeaType').value;
+                const thesisSummary = document.getElementById('tradeIdeaThesis').value.trim();
+                if (!symbol || !title) {
+                    Utils.showNotification('Trade idea symbol and title are required', 'warning');
+                    return;
+                }
+
+                try {
+                    await InvestingApi.createTradeIdea({
+                        symbol,
+                        title,
+                        idea_type: ideaType,
+                        thesis_summary: thesisSummary
+                    });
+                    Utils.showNotification('Trade idea created', 'success');
+                    window.location.reload();
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to create trade idea', 'danger');
+                }
+            });
+        }
+
+        addSymbolForms.forEach((form) => {
+            form.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const watchlistId = form.getAttribute('data-watchlist-id');
+                const symbol = form.querySelector('.symbol-input').value.trim();
+                if (!symbol) {
+                    Utils.showNotification('Ticker symbol is required', 'warning');
+                    return;
+                }
+
+                try {
+                    await InvestingApi.addSymbol(watchlistId, { symbol });
+                    Utils.showNotification(`Added ${symbol.toUpperCase()} to watchlist`, 'success');
+                    window.location.reload();
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to add symbol', 'danger');
+                }
+            });
+        });
+
+        refreshButtons.forEach((button) => {
+            button.addEventListener('click', async () => {
+                const symbol = button.getAttribute('data-symbol');
+                try {
+                    const result = await InvestingApi.refreshSymbol(symbol);
+                    Utils.showNotification(result.message || `Queued ${symbol} for refresh`, 'success');
+                    if (assetRefreshPollHandles.has(symbol)) {
+                        window.clearInterval(assetRefreshPollHandles.get(symbol));
+                    }
+                    const pollHandle = window.setInterval(async () => {
+                        try {
+                            const status = await InvestingApi.getAssetRefreshStatus(symbol);
+                            if (status.is_running) {
+                                return;
+                            }
+                            window.clearInterval(pollHandle);
+                            assetRefreshPollHandles.delete(symbol);
+                            if (status.has_error) {
+                                Utils.showNotification(`Refresh failed for ${symbol}: ${status.error}`, 'danger');
+                                return;
+                            }
+                            Utils.showNotification(`Refresh complete for ${symbol}`, 'success');
+                            window.setTimeout(() => window.location.reload(), 500);
+                        } catch (error) {
+                            window.clearInterval(pollHandle);
+                            assetRefreshPollHandles.delete(symbol);
+                            Utils.showNotification(error.message || `Failed to read refresh status for ${symbol}`, 'danger');
+                        }
+                    }, 2000);
+                    assetRefreshPollHandles.set(symbol, pollHandle);
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to queue asset refresh', 'danger');
+                }
+            });
+        });
+
+        deleteButtons.forEach((button) => {
+            button.addEventListener('click', async () => {
+                const watchlistId = button.getAttribute('data-watchlist-id');
+                const itemId = button.getAttribute('data-item-id');
+                try {
+                    await InvestingApi.deleteSymbol(watchlistId, itemId);
+                    Utils.showNotification('Symbol removed from watchlist', 'success');
+                    window.location.reload();
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to remove symbol', 'danger');
+                }
+            });
+        });
+    });
+</script>
+{% endblock %}

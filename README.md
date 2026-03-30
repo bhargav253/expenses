@@ -47,6 +47,7 @@ A comprehensive expense tracking web application with AI-powered data processing
 - **SQLite** - Database (easily upgradable to PostgreSQL)
 - **Authlib** - OAuth authentication
 - **Requests** - HTTP client for AI API
+- **Standalone ticker worker** - DB-backed Finnhub ingestion for screener/watchlist data
 
 ### Frontend
 - **Bootstrap 5** - Responsive UI framework
@@ -110,6 +111,31 @@ A comprehensive expense tracking web application with AI-powered data processing
 - PDF processing happens server-side with Camelot and PyPDF
 - Structured logging to `logs/app.log` with JSON format
 
+### Screener Worker
+
+The investing screener now supports a separate ingestion worker process:
+- the web app reads ticker snapshots from the app DB
+- the worker refreshes ticker history, intraday bars, fundamentals, and latest snapshots
+- new ticker symbols are queued into fetch state when they are seeded or added by users
+
+Required env var for worker-backed ingestion:
+- `FINNHUB_API_KEY`
+
+Run the web app locally:
+```bash
+python app.py
+```
+
+Run the ticker worker locally in another shell:
+```bash
+python ticker_worker.py
+```
+
+Run a single worker pass locally:
+```bash
+TICKER_WORKER_ONCE=true python ticker_worker.py
+```
+
 ### Cloud Deployment (Render.com)
 
 1. **Fork this repository**
@@ -120,13 +146,32 @@ A comprehensive expense tracking web application with AI-powered data processing
      - **Build Command**: `pip install -r requirements.txt`
      - **Start Command**: `gunicorn app:app`
 
-3. **Configure environment variables**
+3. **Create a separate Worker Service on Render**
+   - Same repository and build command
+   - **Start Command**: `python ticker_worker.py`
+   - This process should point at the same database as the web service
+   - Only one worker loop should be active; the app enforces this with a DB lease row
+
+4. **Configure environment variables**
    - `SECRET_KEY`: Generate a secure random key
    - `GOOGLE_CLIENT_ID`: Your Google OAuth client ID
    - `GOOGLE_CLIENT_SECRET`: Your Google OAuth client secret
+   - `FINNHUB_API_KEY`: Finnhub API key used by the ticker ingestion worker
+   - `FINNHUB_RATE_LIMIT_PER_MINUTE`: Optional worker-side central rate budget
+   - `TICKER_WORKER_SLEEP_SECONDS`: Optional idle sleep interval for the worker loop
 
-4. **Deploy**
+5. **Deploy**
    - Render will automatically deploy your application
+
+### Render Runtime Model
+
+When hosted on Render, the intended investing flow is:
+- the `web` service serves Flask routes and reads screener/watchlist data from DB tables
+- the `worker` service runs `ticker_worker.py` continuously
+- both services connect to the same database
+- when a user adds a new ticker, the web app creates or reuses the global asset row and marks fetch-state rows as pending
+- the worker sees that pending work, fetches Finnhub data, stores bars/fundamentals/snapshots, and updates retry state
+- subsequent screener/watchlist page loads read the refreshed snapshot rows without making per-request Finnhub calls
 
 ## Configuration
 

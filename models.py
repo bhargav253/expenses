@@ -12,6 +12,10 @@ EXPENSE_CATEGORIES = [
     'service', 'shopping', 'transport', 'utility', 'vacation'
 ]
 
+
+def utc_today():
+    return datetime.utcnow().date()
+
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     google_id = db.Column(db.String(255), unique=True, nullable=True)
@@ -70,6 +74,9 @@ class Dashboard(db.Model):
     # Relationships
     members = db.relationship('DashboardMember', back_populates='dashboard')
     expenses = db.relationship('Expense', back_populates='dashboard')
+    watchlists = db.relationship('Watchlist', back_populates='dashboard')
+    trade_ideas = db.relationship('TradeIdea', back_populates='dashboard')
+    screener_definitions = db.relationship('ScreenerDefinition', back_populates='dashboard')
 
 class DashboardMember(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -97,6 +104,307 @@ class Expense(db.Model):
     # Relationships
     dashboard = db.relationship('Dashboard', back_populates='expenses')
     user = db.relationship('User', back_populates='expenses')
+
+
+class Asset(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    symbol = db.Column(db.String(32), unique=True, nullable=False, index=True)
+    name = db.Column(db.String(255))
+    asset_type = db.Column(db.String(50), default='equity')
+    exchange = db.Column(db.String(64))
+    currency = db.Column(db.String(16), default='USD')
+    sector = db.Column(db.String(128))
+    industry = db.Column(db.String(128))
+    is_active = db.Column(db.Boolean, default=True)
+    status = db.Column(db.String(32), default='active')
+    added_source = db.Column(db.String(32), default='user')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    market_snapshots = db.relationship('MarketSnapshot', back_populates='asset')
+    fundamental_snapshots = db.relationship('FundamentalSnapshot', back_populates='asset')
+    ticker_snapshot_latest = db.relationship('TickerSnapshotLatest', back_populates='asset', uselist=False)
+    ticker_daily_bars = db.relationship('TickerDailyBar', back_populates='asset')
+    ticker_intraday_bars = db.relationship('TickerIntradayBar', back_populates='asset')
+    ticker_fundamentals_latest = db.relationship('TickerFundamentalsLatest', back_populates='asset', uselist=False)
+    ticker_fetch_state = db.relationship('TickerFetchState', back_populates='asset', uselist=False)
+    watchlist_items = db.relationship('WatchlistItem', back_populates='asset')
+    trade_ideas = db.relationship('TradeIdea', back_populates='asset')
+
+
+class Watchlist(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text)
+    is_archived = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dashboard = db.relationship('Dashboard', back_populates='watchlists')
+    creator = db.relationship('User')
+    items = db.relationship('WatchlistItem', back_populates='watchlist')
+
+
+class WatchlistItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    watchlist_id = db.Column(db.Integer, db.ForeignKey('watchlist.id'), nullable=False)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False)
+    added_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    position_status = db.Column(db.String(50), default='watching')
+    thesis_summary = db.Column(db.Text)
+    bull_case = db.Column(db.Text)
+    bear_case = db.Column(db.Text)
+    target_price = db.Column(db.Float)
+    invalidation_price = db.Column(db.Float)
+    conviction_score = db.Column(db.Integer)
+    time_horizon = db.Column(db.String(100))
+    catalyst_date = db.Column(db.Date)
+    notes = db.Column(db.Text)
+    tags_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    watchlist = db.relationship('Watchlist', back_populates='items')
+    asset = db.relationship('Asset', back_populates='watchlist_items')
+    added_by_user = db.relationship('User')
+
+    __table_args__ = (
+        db.UniqueConstraint('watchlist_id', 'asset_id', name='unique_watchlist_asset'),
+    )
+
+
+class TradeIdea(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    source_type = db.Column(db.String(50), default='manual')
+    idea_type = db.Column(db.String(50), default='watch')
+    title = db.Column(db.String(255), nullable=False)
+    thesis_summary = db.Column(db.Text)
+    entry_zone = db.Column(db.String(255))
+    target_1 = db.Column(db.String(255))
+    target_2 = db.Column(db.String(255))
+    invalidation = db.Column(db.String(255))
+    time_horizon = db.Column(db.String(100))
+    confidence_score = db.Column(db.Integer)
+    catalysts = db.Column(db.Text)
+    risks = db.Column(db.Text)
+    status = db.Column(db.String(50), default='active')
+    opened_at = db.Column(db.DateTime)
+    closed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dashboard = db.relationship('Dashboard', back_populates='trade_ideas')
+    asset = db.relationship('Asset', back_populates='trade_ideas')
+    creator = db.relationship('User')
+
+
+class MarketSnapshot(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False)
+    provider = db.Column(db.String(50), nullable=False, default='yfinance')
+    snapshot_date = db.Column(db.Date, nullable=False, default=utc_today)
+    price = db.Column(db.Float)
+    change_percent = db.Column(db.Float)
+    market_cap = db.Column(db.Float)
+    volume = db.Column(db.Float)
+    avg_volume = db.Column(db.Float)
+    fifty_two_week_high = db.Column(db.Float)
+    fifty_two_week_low = db.Column(db.Float)
+    moving_average_50 = db.Column(db.Float)
+    moving_average_200 = db.Column(db.Float)
+    raw_payload_json = db.Column(db.Text)
+    fetched_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    asset = db.relationship('Asset', back_populates='market_snapshots')
+
+    __table_args__ = (
+        db.Index('idx_market_snapshot_asset_date_provider', 'asset_id', 'snapshot_date', 'provider'),
+    )
+
+
+class FundamentalSnapshot(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False)
+    provider = db.Column(db.String(50), nullable=False, default='yfinance')
+    as_of_date = db.Column(db.Date, nullable=False, default=utc_today)
+    pe_ratio = db.Column(db.Float)
+    forward_pe = db.Column(db.Float)
+    price_to_sales = db.Column(db.Float)
+    revenue_growth = db.Column(db.Float)
+    eps_growth = db.Column(db.Float)
+    gross_margin = db.Column(db.Float)
+    operating_margin = db.Column(db.Float)
+    free_cash_flow = db.Column(db.Float)
+    debt_to_equity = db.Column(db.Float)
+    return_on_equity = db.Column(db.Float)
+    raw_payload_json = db.Column(db.Text)
+    fetched_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    asset = db.relationship('Asset', back_populates='fundamental_snapshots')
+
+    __table_args__ = (
+        db.Index('idx_fundamental_snapshot_asset_date_provider', 'asset_id', 'as_of_date', 'provider'),
+    )
+
+
+class TickerSnapshotLatest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False, unique=True, index=True)
+    last_price = db.Column(db.Float)
+    day_open = db.Column(db.Float)
+    day_high = db.Column(db.Float)
+    day_low = db.Column(db.Float)
+    day_close = db.Column(db.Float)
+    today_change_percent = db.Column(db.Float)
+    market_cap = db.Column(db.Float)
+    volume = db.Column(db.Float)
+    avg_volume = db.Column(db.Float)
+    pe_ratio = db.Column(db.Float)
+    peg_ratio = db.Column(db.Float)
+    forward_pe = db.Column(db.Float)
+    revenue_growth = db.Column(db.Float)
+    eps_growth = db.Column(db.Float)
+    revenue = db.Column(db.Float)
+    dividend_yield = db.Column(db.Float)
+    fifty_two_week_high = db.Column(db.Float)
+    fifty_two_week_low = db.Column(db.Float)
+    days_since_52_week_high = db.Column(db.Integer)
+    days_since_52_week_low = db.Column(db.Integer)
+    sma_10 = db.Column(db.Float)
+    sma_20 = db.Column(db.Float)
+    moving_average_50 = db.Column(db.Float)
+    moving_average_200 = db.Column(db.Float)
+    price_performance_5d = db.Column(db.Float)
+    price_performance_4w = db.Column(db.Float)
+    price_performance_13w = db.Column(db.Float)
+    price_performance_52w = db.Column(db.Float)
+    annualized_return_1y = db.Column(db.Float)
+    annualized_return_3y = db.Column(db.Float)
+    annualized_return_5y = db.Column(db.Float)
+    annualized_return_10y = db.Column(db.Float)
+    total_return = db.Column(db.Float)
+    percent_price_off_10day_sma = db.Column(db.Float)
+    percent_price_off_20day_sma = db.Column(db.Float)
+    percent_below_52_week_high = db.Column(db.Float)
+    percent_above_52_week_low = db.Column(db.Float)
+    percent_price_off_50day_sma = db.Column(db.Float)
+    percent_price_off_200day_sma = db.Column(db.Float)
+    quote_as_of = db.Column(db.DateTime)
+    fundamentals_as_of = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    asset = db.relationship('Asset', back_populates='ticker_snapshot_latest')
+
+
+class TickerDailyBar(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False, index=True)
+    bar_date = db.Column(db.Date, nullable=False, index=True)
+    open = db.Column(db.Float)
+    high = db.Column(db.Float)
+    low = db.Column(db.Float)
+    close = db.Column(db.Float)
+    volume = db.Column(db.Float)
+    source = db.Column(db.String(50), default='finnhub')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    asset = db.relationship('Asset', back_populates='ticker_daily_bars')
+
+    __table_args__ = (
+        db.UniqueConstraint('asset_id', 'bar_date', name='unique_ticker_daily_bar_asset_date'),
+    )
+
+
+class TickerIntradayBar(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False, index=True)
+    bar_timestamp = db.Column(db.DateTime, nullable=False, index=True)
+    open = db.Column(db.Float)
+    high = db.Column(db.Float)
+    low = db.Column(db.Float)
+    close = db.Column(db.Float)
+    volume = db.Column(db.Float)
+    source = db.Column(db.String(50), default='finnhub')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    asset = db.relationship('Asset', back_populates='ticker_intraday_bars')
+
+    __table_args__ = (
+        db.UniqueConstraint('asset_id', 'bar_timestamp', name='unique_ticker_intraday_bar_asset_timestamp'),
+    )
+
+
+class TickerFundamentalsLatest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False, unique=True, index=True)
+    market_cap = db.Column(db.Float)
+    pe_ratio = db.Column(db.Float)
+    peg_ratio = db.Column(db.Float)
+    revenue = db.Column(db.Float)
+    dividend_yield = db.Column(db.Float)
+    shares_outstanding = db.Column(db.Float)
+    as_of_date = db.Column(db.Date)
+    fetched_at = db.Column(db.DateTime, default=datetime.utcnow)
+    raw_payload_json = db.Column(db.Text)
+
+    asset = db.relationship('Asset', back_populates='ticker_fundamentals_latest')
+
+
+class TickerFetchState(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False, unique=True, index=True)
+    history_backfilled_at = db.Column(db.DateTime)
+    daily_fundamentals_fetched_at = db.Column(db.DateTime)
+    intraday_fetched_at = db.Column(db.DateTime)
+    last_market_refresh_at = db.Column(db.DateTime)
+    last_market_close_trade_date = db.Column(db.Date)
+    last_fundamentals_trade_date = db.Column(db.Date)
+    last_daily_bar_date = db.Column(db.Date)
+    last_intraday_bar_timestamp = db.Column(db.DateTime)
+    last_success_at = db.Column(db.DateTime)
+    last_attempt_at = db.Column(db.DateTime)
+    last_error_at = db.Column(db.DateTime)
+    last_error_type = db.Column(db.String(64))
+    last_error_message = db.Column(db.Text)
+    failure_count = db.Column(db.Integer, default=0)
+    next_retry_at = db.Column(db.DateTime)
+    priority_requested_at = db.Column(db.DateTime)
+    is_backfill_pending = db.Column(db.Boolean, default=True)
+    is_fundamentals_pending = db.Column(db.Boolean, default=True)
+    is_intraday_pending = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    asset = db.relationship('Asset', back_populates='ticker_fetch_state')
+
+
+class WorkerLease(db.Model):
+    lease_name = db.Column(db.String(100), primary_key=True)
+    owner_id = db.Column(db.String(255))
+    leased_until = db.Column(db.DateTime)
+    heartbeat_at = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ScreenerDefinition(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text)
+    filters_json = db.Column(db.Text, nullable=False)
+    sort_json = db.Column(db.Text)
+    is_archived = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dashboard = db.relationship('Dashboard', back_populates='screener_definitions')
+    creator = db.relationship('User')
 
 class Category(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -225,6 +533,8 @@ class UserDashboardSettings(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
     edit_mode = db.Column(db.String(50), default='private')  # 'private', 'public'
+    selected_investing_watchlist_id = db.Column(db.Integer, nullable=True)
+    selected_investing_screener_id = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

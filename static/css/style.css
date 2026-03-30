@@ -178,6 +178,130 @@ a:hover {
     border-top: 1px dashed #e5e8f5;
 }
 
+.workspace-split {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.25rem;
+    position: relative;
+    z-index: 1;
+}
+
+.workspace-card {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 320px;
+    padding: 1.6rem;
+    border-radius: 22px;
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    color: var(--brand-deep);
+    background: rgba(255, 255, 255, 0.84);
+    box-shadow: 0 20px 45px rgba(12, 23, 52, 0.08);
+    backdrop-filter: blur(8px);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    text-decoration: none;
+    overflow: hidden;
+    position: relative;
+}
+
+.workspace-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    opacity: 0.9;
+    pointer-events: none;
+}
+
+.workspace-card:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 24px 54px rgba(12, 23, 52, 0.12);
+}
+
+.workspace-card-expense::before {
+    background: linear-gradient(155deg, rgba(65, 84, 241, 0.08), rgba(65, 84, 241, 0.02) 45%, transparent 100%);
+}
+
+.workspace-card-investing::before {
+    background: linear-gradient(155deg, rgba(27, 154, 223, 0.12), rgba(45, 182, 250, 0.04) 45%, transparent 100%);
+}
+
+.workspace-card-top,
+.workspace-card-body,
+.workspace-card-footer {
+    position: relative;
+    z-index: 1;
+}
+
+.workspace-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1.25rem;
+}
+
+.workspace-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.8rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    background: rgba(11, 31, 76, 0.06);
+    color: var(--brand-deep);
+}
+
+.workspace-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 54px;
+    height: 54px;
+    border-radius: 16px;
+    font-size: 1.25rem;
+    color: #fff;
+    box-shadow: 0 16px 28px rgba(12, 23, 52, 0.16);
+}
+
+.workspace-card-expense .workspace-icon {
+    background: linear-gradient(145deg, #4154f1, #3243c7);
+}
+
+.workspace-card-investing .workspace-icon {
+    background: linear-gradient(145deg, #0fa67f, #1b9adf);
+}
+
+.workspace-points {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+}
+
+.workspace-points span {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.45rem 0.7rem;
+    border-radius: 999px;
+    background: rgba(11, 31, 76, 0.05);
+    color: var(--brand-deep);
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.workspace-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid rgba(11, 31, 76, 0.08);
+    font-weight: 700;
+}
+
+.workspace-cta {
+    color: var(--brand-deep);
+}
+
 /* Sections */
 .section-heading {
     margin-bottom: 1.5rem;
@@ -222,6 +346,12 @@ a:hover {
     height: 100%;
     transition: transform 0.2s ease, box-shadow 0.2s ease;
     position: relative;
+}
+
+@media (max-width: 991.98px) {
+    .workspace-split {
+        grid-template-columns: 1fr;
+    }
 }
 
 .feature-card:hover {
