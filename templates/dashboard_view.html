@@ -3,6 +3,191 @@
 {% block title %}{{ dashboard.name }} - Expense Dashboard{% endblock %}
 
 {% block content %}
+<style>
+    .ingress-main-column,
+    .ingress-rail-column {
+        position: relative;
+    }
+
+    .ingress-rail-column {
+        display: flex;
+    }
+
+    .ingress-rail-shell {
+        position: sticky;
+        top: 1rem;
+        transition: box-shadow 0.2s ease, transform 0.2s ease;
+        width: 100%;
+        height: 100%;
+    }
+
+    .ingress-rail-column.is-collapsed {
+        flex: 0 0 2.75rem;
+        width: 2.75rem;
+        max-width: 2.75rem;
+    }
+
+    .ingress-rail-shell.is-collapsed {
+        width: 2.75rem;
+    }
+
+    .ingress-rail-shell.is-collapsed .ingress-rail-body,
+    .ingress-rail-shell.is-collapsed .ingress-rail-subtitle,
+    .ingress-rail-shell.is-collapsed .ingress-rail-title-text {
+        display: none;
+    }
+
+    .ingress-rail-shell.is-collapsed .ingress-rail-header {
+        justify-content: center;
+        padding-inline: 0.5rem;
+    }
+
+    .ingress-rail-shell.is-collapsed .ingress-rail-toggle {
+        margin-left: 0;
+    }
+
+    .ingress-rail-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+    }
+
+    .ingress-rail-toggle {
+        width: 2rem;
+        height: 2rem;
+        padding: 0;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .ingress-rail-column.is-collapsed .card-header {
+        background: #fff;
+        border-bottom: 0;
+        padding-block: 0.9rem;
+        min-height: 100%;
+        align-items: flex-start;
+        justify-content: center;
+    }
+
+    .ingress-agent-card .card-body {
+        min-height: 34rem;
+    }
+
+    .ingress-agent-card #aiChatMessages {
+        min-height: 22rem;
+    }
+
+    .ingress-agent-card .input-group {
+        position: sticky;
+        bottom: 0;
+        background: #fff;
+        padding-top: 0.75rem;
+    }
+
+    .border-dashed {
+        border: 1px dashed rgba(15, 23, 42, 0.2);
+        border-radius: 0.75rem;
+        background: rgba(248, 250, 252, 0.7);
+    }
+
+    .option-card {
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .option-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+    }
+
+    #csvPreviewTable,
+    #csvPreviewTable th,
+    #csvPreviewTable td {
+        background: #fff;
+        color: #0f172a;
+        border-color: rgba(15, 23, 42, 0.12);
+    }
+
+    #csvPreviewTable th {
+        background: rgba(248, 250, 252, 0.96);
+        font-weight: 700;
+    }
+
+    #editableCsvTable .handsontable,
+    #monthlyExpensesTable .handsontable,
+    #editableCsvTable .handsontable .htCore,
+    #monthlyExpensesTable .handsontable .htCore,
+    #editableCsvTable .handsontable .wtHolder,
+    #monthlyExpensesTable .handsontable .wtHolder {
+        background: #fff;
+        color: #0f172a;
+    }
+
+    #editableCsvTable .handsontable th,
+    #monthlyExpensesTable .handsontable th,
+    #editableCsvTable .handsontable td,
+    #monthlyExpensesTable .handsontable td,
+    #editableCsvTable .handsontable .wtBorder,
+    #monthlyExpensesTable .handsontable .wtBorder {
+        border-color: rgba(15, 23, 42, 0.12) !important;
+    }
+
+    #editableCsvTable .handsontable th,
+    #monthlyExpensesTable .handsontable th {
+        background: rgba(248, 250, 252, 0.96) !important;
+        color: #0f172a !important;
+        font-weight: 700;
+    }
+
+    #editableCsvTable .handsontable td,
+    #monthlyExpensesTable .handsontable td,
+    #editableCsvTable .handsontable .htDimmed,
+    #monthlyExpensesTable .handsontable .htDimmed {
+        background: #fff !important;
+        color: #0f172a !important;
+    }
+
+    #editableCsvTable .handsontable tbody tr:nth-child(even) td,
+    #monthlyExpensesTable .handsontable tbody tr:nth-child(even) td {
+        background: rgba(248, 250, 252, 0.72) !important;
+    }
+
+    #editableCsvTable .handsontable .currentRow,
+    #monthlyExpensesTable .handsontable .currentRow,
+    #editableCsvTable .handsontable .currentCol,
+    #monthlyExpensesTable .handsontable .currentCol {
+        background: rgba(65, 84, 241, 0.08) !important;
+    }
+
+    #editableCsvTable .handsontable .area,
+    #monthlyExpensesTable .handsontable .area {
+        background: rgba(65, 84, 241, 0.05) !important;
+    }
+
+    .handsontableInputHolder textarea,
+    .handsontableInput {
+        background: #fff !important;
+        color: #0f172a !important;
+    }
+
+    @media (max-width: 991.98px) {
+        .ingress-rail-shell {
+            position: static;
+        }
+
+        .ingress-agent-card .card-body {
+            min-height: auto;
+        }
+
+        .ingress-agent-card #aiChatMessages {
+            min-height: 12rem;
+        }
+    }
+</style>
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h2><i class="fas fa-wallet me-2"></i>{{ dashboard.name }}</h2>
@@ -86,237 +271,215 @@
 
 <!-- Tab Content -->
 <div class="tab-content" id="dashboardTabsContent">
-    <!-- Ingress Tab -->
     <div class="tab-pane fade show active" id="ingress" role="tabpanel">
-        <div class="row">
-            <div class="col-lg-8">
+        <div class="row g-4 ingress-layout" id="ingressWorkspaceLayout">
+            <div class="col-lg-3 ingress-rail-column" id="ingressHelperColumn">
+                <div class="card ingress-rail-shell" id="ingressHelperRail">
+                    <div class="card-header bg-white ingress-rail-header">
+                        <div>
+                            <h5 class="mb-1 ingress-rail-title-text"><i class="fas fa-compass me-2 text-primary"></i>Import Guide</h5>
+                            <div class="small text-muted ingress-rail-subtitle">How the workflow works, who has access, and dashboard edit rules.</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary ingress-rail-toggle" id="ingressHelperCollapseBtn" aria-label="Collapse helper rail" aria-expanded="true" title="Collapse helper rail">
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                    </div>
+                    <div class="card-body ingress-rail-body">
+                        <div class="d-flex flex-column gap-4">
+                            <div class="card border-0 shadow-none">
+                                <div class="card-header bg-info text-white rounded-3">
+                                    <h5 class="mb-0"><i class="fas fa-info-circle me-2"></i>How Import Works</h5>
+                                </div>
+                                <div class="card-body px-0 pb-0">
+                                    <ol class="list-group list-group-numbered">
+                                        <li class="list-group-item border-0 px-0"><strong>Choose Source</strong> - Paste data or upload a file</li>
+                                        <li class="list-group-item border-0 px-0"><strong>Load Preview</strong> - Inspect the normalized rows</li>
+                                        <li class="list-group-item border-0 px-0"><strong>Clean If Needed</strong> - Use the assistant or edit manually</li>
+                                        <li class="list-group-item border-0 px-0"><strong>Import</strong> - Save the final rows to your expense dashboard</li>
+                                    </ol>
+                                </div>
+                            </div>
+
+                            <div class="card border-0 shadow-none">
+                                <div class="card-header bg-info text-white rounded-3">
+                                    <h5 class="mb-0"><i class="fas fa-users me-2"></i>Expense Dashboard Members</h5>
+                                </div>
+                                <div class="card-body px-0 pb-0">
+                                    <div class="list-group list-group-flush">
+                                        {% for member in dashboard.members %}
+                                        <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                            <div>
+                                                <img src="{{ member.user.get_profile_picture() }}" alt="{{ member.user.name }}" class="rounded-circle me-2" width="30" height="30">
+                                                {{ member.user.name }}
+                                            </div>
+                                            <span class="badge bg-{{ 'primary' if member.role == 'owner' else 'secondary' }}">{{ member.role }}</span>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="card border-0 shadow-none">
+                                <div class="card-header bg-info text-white rounded-3">
+                                    <h5 class="mb-0"><i class="fas fa-edit me-2"></i>Edit Settings</h5>
+                                </div>
+                                <div class="card-body px-0 pb-0">
+                                    <div class="mb-3">
+                                        <label class="form-label">Edit Mode</label>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="editMode" id="privateMode" value="private" checked>
+                                            <label class="form-check-label" for="privateMode"><i class="fas fa-lock me-1"></i>Private Mode</label>
+                                            <small class="form-text text-muted d-block">Only you can edit your own expense entries</small>
+                                        </div>
+                                        <div class="form-check mt-2">
+                                            <input class="form-check-input" type="radio" name="editMode" id="publicMode" value="public">
+                                            <label class="form-check-label" for="publicMode"><i class="fas fa-unlock me-1"></i>Public Mode</label>
+                                            <small class="form-text text-muted d-block">All expense dashboard members can edit any expense entries</small>
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-primary w-100" id="saveEditMode">
+                                        <i class="fas fa-save me-1"></i>Save Settings
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-6 ingress-main-column" id="ingressMainColumn">
                 <div class="card">
                     <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                        <h5 class="mb-0"><i class="fas fa-upload me-2"></i>Upload Data</h5>
+                        <h5 class="mb-0"><i class="fas fa-upload me-2"></i>Import Expenses</h5>
                         <span class="badge bg-light text-primary d-none d-md-inline-flex align-items-center">
                             <i class="fas fa-shield-alt me-2"></i>Secure by design
                         </span>
                     </div>
                     <div class="card-body">
-                        
-                        <!-- Two Option Layout -->
+                        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-4">
+                            <div>
+                                <div class="text-uppercase small fw-semibold text-muted mb-1">Source First</div>
+                                <div class="text-muted">Choose how the data enters the app, then use the helper rail only if cleanup is needed.</div>
+                            </div>
+                        </div>
+
                         <div class="row mb-4">
-                            <!-- Option 1: Google Sheets Direct CSV Copy -->
                             <div class="col-md-6">
-                                <div class="card option-card h-100" data-option="sheets">
+                                <div class="card option-card h-100" data-option="paste">
                                     <div class="card-body text-center">
-                                        <i class="fas fa-table fa-3x text-primary mb-3"></i>
-                                        <h5>Google Sheets Copy</h5>
-                                        <p class="text-muted mb-3">Directly paste CSV data from Google Sheets</p>
-                                        <button class="btn btn-primary" data-option="sheets">
+                                        <i class="fas fa-paste fa-3x text-primary mb-3"></i>
+                                        <h5>Paste Data</h5>
+                                        <p class="text-muted mb-3">Paste CSV or copied spreadsheet rows directly into the workspace.</p>
+                                        <button class="btn btn-primary" data-option="paste">
                                             <i class="fas fa-paste me-1"></i>Paste Data
                                         </button>
                                     </div>
                                 </div>
                             </div>
-                            
-                            <!-- Option 2: AI Processing of PDF/CSV -->
                             <div class="col-md-6">
-                                <div class="card option-card h-100" data-option="ai">
+                                <div class="card option-card h-100" data-option="upload">
                                     <div class="card-body text-center">
-                                        <i class="fas fa-robot fa-3x text-info mb-3"></i>
-                                        <h5>AI Processing</h5>
-                                        <p class="text-muted mb-3">Upload files and use AI for processing</p>
-                                        <button class="btn btn-info" data-option="ai">
-                                            <i class="fas fa-magic me-1"></i>Use AI
+                                        <i class="fas fa-file-import fa-3x text-info mb-3"></i>
+                                        <h5>Upload File</h5>
+                                        <p class="text-muted mb-3">Upload CSV, Excel, or PDF files and clean them before import.</p>
+                                        <button class="btn btn-info" data-option="upload">
+                                            <i class="fas fa-folder-open me-1"></i>Upload File
                                         </button>
                                     </div>
                                 </div>
                             </div>
                         </div>
-                        
-                        <!-- Google Sheets Paste Area -->
+
                         <div id="sheetsPasteArea" class="d-none">
-                            <h6>Paste from Google Sheets</h6>
-                            <p class="text-muted mb-3">Copy and paste your CSV data from Google Sheets</p>
-                            <textarea id="sheetsPasteText" class="form-control mb-3" rows="8" 
-                                      placeholder="Paste your CSV data here from Google Sheets..."></textarea>
+                            <h6>Paste Data</h6>
+                            <p class="text-muted mb-3">Paste exported CSV or copied Google Sheets rows. After preview loads, you can import it as-is or use the assistant to clean it.</p>
+                            <textarea id="sheetsPasteText" class="form-control mb-3" rows="8" placeholder="Paste your CSV or copied spreadsheet rows here..."></textarea>
                             <div class="d-flex gap-2">
-                                <button class="btn btn-primary" id="processSheetsData">
-                                    <i class="fas fa-play me-1"></i>Process Data
-                                </button>
-                                <button class="btn btn-outline-secondary" id="cancelSheets">
-                                    <i class="fas fa-times me-1"></i>Cancel
-                                </button>
+                                <button class="btn btn-primary" id="processSheetsData"><i class="fas fa-play me-1"></i>Load Preview</button>
+                                <button class="btn btn-outline-secondary" id="cancelSheets"><i class="fas fa-times me-1"></i>Cancel</button>
                             </div>
                         </div>
-                        
-                        
-                        <!-- AI Chat Interface -->
+
                         <div id="aiUploadArea" class="d-none">
-                            <h6>AI Assistant</h6>
-                            <p class="text-muted mb-3">Upload files and chat with AI to process your expense data. The AI will maintain context throughout your session.</p>
-                            
-                            <!-- Chat Messages -->
-                            <div id="aiChatMessages" class="mb-3" style="max-height: 300px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 0.375rem; padding: 1rem;"></div>
-                            
-                            <!-- Chat Input -->
-                            <div class="input-group mb-3">
-                                <input type="text" id="aiChatInput" class="form-control" placeholder="Describe what you want to do with your data...">
-                                <button class="btn btn-success" id="sendAiMessage">
-                                    <i class="fas fa-paper-plane"></i>
-                                </button>
-                            </div>
-                            
-                            <!-- File Upload Area -->
+                            <h6>Upload File</h6>
+                            <p class="text-muted mb-3">Choose a source file. Once the data is loaded, use the helper rail if you need cleanup or categorization assistance.</p>
                             <div class="border-dashed p-3 mb-3">
                                 <div class="d-flex align-items-start justify-content-between">
                                     <div>
                                         <i class="fas fa-file-upload text-muted me-2"></i>
-                                        <span class="text-muted">Upload PDF or CSV file</span>
+                                        <span class="text-muted">Upload CSV, Excel, or PDF file</span>
                                         <div class="mt-2">
-                                            <small class="text-muted d-block">Supported formats: CSV, PDF (bank statements)</small>
+                                            <small class="text-muted d-block">Supported formats: CSV, Excel, PDF bank statements</small>
                                         </div>
                                     </div>
                                     <div class="d-flex flex-column align-items-end gap-2">
-                                        <input type="file" id="aiFileInput" accept=".csv,.pdf" class="d-none">
-                                        <button type="button" class="btn btn-sm btn-outline-info" id="chooseFileBtn">
-                                            <i class="fas fa-folder-open me-1"></i>Choose File
-                                        </button>
-                                        <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pdfSettingsModal">
-                                            <i class="fas fa-sliders me-1"></i>Settings
-                                        </button>
+                                        <input type="file" id="aiFileInput" accept=".csv,.pdf,.xlsx,.xls" class="d-none">
+                                        <button type="button" class="btn btn-sm btn-outline-info" id="chooseFileBtn"><i class="fas fa-folder-open me-1"></i>Choose File</button>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#pdfSettingsModal"><i class="fas fa-sliders me-1"></i>Settings</button>
                                     </div>
                                 </div>
                             </div>
-                            
                             <div class="d-flex gap-2">
-                                <button class="btn btn-outline-secondary" id="cancelAI">
-                                    <i class="fas fa-times me-1"></i>Cancel
-                                </button>
+                                <button class="btn btn-outline-secondary" id="cancelAI"><i class="fas fa-times me-1"></i>Cancel</button>
                             </div>
                         </div>
-                        
+
                         <div id="processingArea" class="d-none">
                             <div class="progress mb-3">
                                 <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
                             </div>
-                            <p class="text-center">Processing PDF... This may take a few moments.</p>
+                            <p class="text-center">Processing import source... This may take a few moments.</p>
                         </div>
-                        
+
                         <div id="csvPreviewArea" class="d-none">
-                            <h6>Extracted Data Preview</h6>
+                            <h6>Normalized Preview</h6>
                             <div class="table-responsive">
-                                <table class="table table-sm table-bordered" id="csvPreviewTable">
-                                    <!-- CSV preview will be populated here -->
-                                </table>
+                                <table class="table table-sm table-bordered" id="csvPreviewTable"></table>
                             </div>
-                            
-                            <!-- Editable CSV Table Section -->
+
                             <div id="editableCsvSection" class="d-none mt-4">
                                 <h6>Editable Data Table</h6>
-                                <p class="text-muted mb-3">Edit the table directly like Google Sheets. Make your changes and click Save when ready.</p>
+                                <p class="text-muted mb-3">Edit the preview directly before importing. The helper rail can still be used after manual edits.</p>
                                 <div id="editableCsvTable"></div>
                                 <div class="mt-3">
-                                    <button class="btn btn-success me-2" id="saveExpenses">
-                                        <i class="fas fa-save me-1"></i>Save to Expenses
-                                    </button>
-                                    <button class="btn btn-outline-secondary" id="cancelEdit">
-                                        <i class="fas fa-times me-1"></i>Cancel
-                                    </button>
+                                    <button class="btn btn-success me-2" id="saveExpenses"><i class="fas fa-save me-1"></i>Save to Expenses</button>
+                                    <button class="btn btn-outline-secondary" id="cancelEdit"><i class="fas fa-times me-1"></i>Cancel</button>
                                 </div>
                             </div>
-                            
-                            <div class="mt-3">
-                                <button class="btn btn-primary me-2" id="saveCsv">
-                                    <i class="fas fa-save me-1"></i>Save Data
-                                </button>
-                                <button class="btn btn-outline-primary" id="editCsv">
-                                    <i class="fas fa-edit me-1"></i>Edit Data
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-            </div>
-            
-            <div class="col-lg-4">
-                <div class="card">
-                    <div class="card-header bg-info text-white">
-                        <h5 class="mb-0"><i class="fas fa-info-circle me-2"></i>How It Works</h5>
-                    </div>
-                    <div class="card-body">
-                        <ol class="list-group list-group-numbered">
-                            <li class="list-group-item border-0 px-0">
-                                <strong>Upload PDF</strong> - Your bank statement is processed locally
-                            </li>
-                            <li class="list-group-item border-0 px-0">
-                                <strong>Extract Data</strong> - Tables are converted to CSV format
-                            </li>
-                            <li class="list-group-item border-0 px-0">
-                                <strong>AI Processing</strong> - Use natural language to transform data
-                            </li>
-                            <li class="list-group-item border-0 px-0">
-                                <strong>Review & Save</strong> - Finalize and add to your dashboard
-                            </li>
-                        </ol>
-                    </div>
-                </div>
-                
-                <div class="card mt-4">
-                    <div class="card-header bg-info text-white">
-                        <h5 class="mb-0"><i class="fas fa-users me-2"></i>Expense Dashboard Members</h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="list-group list-group-flush">
-                            {% for member in dashboard.members %}
-                            <div class="list-group-item d-flex justify-content-between align-items-center">
-                                <div>
-                                    <img src="{{ member.user.get_profile_picture() }}" alt="{{ member.user.name }}" class="rounded-circle me-2" width="30" height="30">
-                                    {{ member.user.name }}
-                                </div>
-                                <span class="badge bg-{{ 'primary' if member.role == 'owner' else 'secondary' }}">
-                                    {{ member.role }}
-                                </span>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                </div>
 
-                <!-- Edit Mode Settings -->
-                <div class="card mt-4">
-                    <div class="card-header bg-info text-white">
-                        <h5 class="mb-0"><i class="fas fa-edit me-2"></i>Edit Settings</h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="mb-3">
-                            <label class="form-label">Edit Mode</label>
-                            <div class="form-check">
-                                <input class="form-check-input" type="radio" name="editMode" id="privateMode" value="private" checked>
-                                <label class="form-check-label" for="privateMode">
-                                    <i class="fas fa-lock me-1"></i>Private Mode
-                                </label>
-                                <small class="form-text text-muted d-block">
-                                    Only you can edit your own expense entries
-                                </small>
-                            </div>
-                            <div class="form-check mt-2">
-                                <input class="form-check-input" type="radio" name="editMode" id="publicMode" value="public">
-                                <label class="form-check-label" for="publicMode">
-                                    <i class="fas fa-unlock me-1"></i>Public Mode
-                                </label>
-                                <small class="form-text text-muted d-block">
-                                    All expense dashboard members can edit any expense entries
-                                </small>
+                            <div class="mt-3">
+                                <button class="btn btn-primary me-2" id="saveCsv"><i class="fas fa-save me-1"></i>Import As-Is</button>
+                                <button class="btn btn-outline-primary" id="editCsv"><i class="fas fa-edit me-1"></i>Edit Data</button>
                             </div>
                         </div>
-                        <button class="btn btn-primary w-100" id="saveEditMode">
-                            <i class="fas fa-save me-1"></i>Save Settings
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-3 ingress-rail-column" id="ingressAgentColumn">
+                <div class="card ingress-rail-shell ingress-agent-card" id="ingressAgentRail">
+                    <div class="card-header bg-white ingress-rail-header">
+                        <div>
+                            <h5 class="mb-1 ingress-rail-title-text"><i class="fas fa-robot me-2 text-primary"></i>Import Assistant</h5>
+                            <div class="small text-muted ingress-rail-subtitle">Use the assistant after data is loaded to clean, normalize, or categorize rows.</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary ingress-rail-toggle" id="ingressAgentCollapseBtn" aria-label="Collapse import assistant" aria-expanded="true" title="Collapse import assistant">
+                            <i class="fas fa-chevron-right"></i>
                         </button>
+                    </div>
+                    <div class="card-body ingress-rail-body">
+                        <p class="text-muted small mb-3">Ask for cleanup help after pasting or uploading data. Example: normalize dates, remove duplicates, or categorize uncategorized rows.</p>
+                        <div id="aiChatMessages" class="mb-3" style="max-height: 420px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 0.375rem; padding: 1rem;"></div>
+                        <div class="input-group">
+                            <input type="text" id="aiChatInput" class="form-control" placeholder="Describe how to clean the loaded data...">
+                            <button class="btn btn-success" id="sendAiMessage"><i class="fas fa-paper-plane"></i></button>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    
-    <!-- Monthly Expenses Tab -->
+
     <div class="tab-pane fade" id="monthly" role="tabpanel">
         <div class="row">
             <div class="col-md-8">
@@ -328,35 +491,23 @@
                                 <button class="btn btn-sm btn-outline-light dropdown-toggle" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
                                     <i class="fas fa-user me-1"></i>All Users
                                 </button>
-                                <ul class="dropdown-menu" id="userDropdownMenu" aria-labelledby="userDropdown">
-                                    <!-- User options will be populated here -->
-                                </ul>
+                                <ul class="dropdown-menu" id="userDropdownMenu" aria-labelledby="userDropdown"></ul>
                             </div>
                             <div class="dropdown">
                                 <button class="btn btn-sm btn-outline-light dropdown-toggle" type="button" id="monthDropdown" data-bs-toggle="dropdown" aria-expanded="false">
                                     <i class="fas fa-calendar me-1"></i>Select Month
                                 </button>
-                                <ul class="dropdown-menu" id="monthDropdownMenu" aria-labelledby="monthDropdown">
-                                    <!-- Month options will be populated here -->
-                                </ul>
+                                <ul class="dropdown-menu" id="monthDropdownMenu" aria-labelledby="monthDropdown"></ul>
                             </div>
                         </div>
                     </div>
                     <div class="card-body">
                         <div id="mobileTableActions" class="d-flex gap-2 mb-3 d-md-none">
-                            <button class="btn btn-outline-primary btn-sm" id="mobileAddRow">
-                                <i class="fas fa-plus me-1"></i>Add row
-                            </button>
-                            <button class="btn btn-outline-danger btn-sm" id="mobileRemoveRow">
-                                <i class="fas fa-trash me-1"></i>Delete row
-                            </button>
-                            <button class="btn btn-success btn-sm" id="mobileSaveRow">
-                                <i class="fas fa-save me-1"></i>Save row
-                            </button>
+                            <button class="btn btn-outline-primary btn-sm" id="mobileAddRow"><i class="fas fa-plus me-1"></i>Add row</button>
+                            <button class="btn btn-outline-danger btn-sm" id="mobileRemoveRow"><i class="fas fa-trash me-1"></i>Delete row</button>
+                            <button class="btn btn-success btn-sm" id="mobileSaveRow"><i class="fas fa-save me-1"></i>Save row</button>
                         </div>
-                        <div id="monthlyExpensesTable" class="table-responsive">
-                            <!-- Handsontable will be initialized here -->
-                        </div>
+                        <div id="monthlyExpensesTable" class="table-responsive"></div>
                     </div>
                 </div>
             </div>
@@ -366,16 +517,13 @@
                         <h5 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Category Breakdown</h5>
                     </div>
                     <div class="card-body">
-                        <div id="categoryPivotTable">
-                            <!-- Pivot table will be populated here -->
-                        </div>
+                        <div id="categoryPivotTable"></div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    
-    <!-- Yearly Overview Tab -->
+
     <div class="tab-pane fade" id="yearly" role="tabpanel">
         <div class="row">
             <div class="col-md-12">
@@ -389,9 +537,7 @@
                             Yearly overview showing aggregated expense data across all months.
                         </div>
                         <div class="table-responsive">
-                            <table class="table table-striped" id="yearlyTable">
-                                <!-- Yearly data will be populated here -->
-                            </table>
+                            <table class="table table-striped" id="yearlyTable"></table>
                         </div>
                     </div>
                 </div>
@@ -399,7 +545,6 @@
         </div>
     </div>
 
-    <!-- Analytics Tab -->
     <div class="tab-pane fade" id="analytics" role="tabpanel">
         <div class="row">
             <div class="col-lg-7">
@@ -432,6 +577,7 @@
                         <div id="analyticsTable" class="table-responsive d-none">
                             <table class="table table-striped mb-0" id="analyticsTableInner"></table>
                         </div>
+                        <div id="analyticsMeta" class="mt-3 d-none"></div>
                         <div id="analyticsSummary" class="text-muted small mt-3"></div>
                         <div id="analyticsFindings" class="mt-3 d-none"></div>
                         <div id="analyticsWarnings" class="mt-3 d-none"></div>

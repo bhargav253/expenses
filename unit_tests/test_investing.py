@@ -4,6 +4,7 @@ import os
 import sys
 import unittest
 import uuid
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -16,6 +17,7 @@ from app import (
 )
 from market_data import FundamentalsSnapshotData, MarketDataService, QuoteSnapshot, normalize_symbol
 from models import Asset, Dashboard, DashboardMember, FundamentalSnapshot, MarketSnapshot, ScreenerDefinition, TickerDailyBar, TickerFetchState, TickerFundamentalsLatest, TickerIntradayBar, TickerSnapshotLatest, TradeIdea, User, UserDashboardSettings, Watchlist, WatchlistItem, WorkerLease
+from models import TradeAgentRun, TradeAgentEvent
 
 
 class FakeProvider:
@@ -181,6 +183,8 @@ class TestInvestingWorkspace(unittest.TestCase):
                 WatchlistItem.query.filter(WatchlistItem.watchlist_id.in_(watchlist_ids)).delete(synchronize_session=False)
             Watchlist.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete()
             TradeIdea.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete()
+            TradeAgentEvent.query.delete(synchronize_session=False)
+            TradeAgentRun.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete()
             ScreenerDefinition.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete()
             UserDashboardSettings.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete()
             FundamentalSnapshot.query.delete(synchronize_session=False)
@@ -468,6 +472,246 @@ class TestInvestingWorkspace(unittest.TestCase):
         ideas = list_response.get_json()['trade_ideas']
         self.assertEqual(len(ideas), 1)
         self.assertEqual(ideas[0]['title'], 'Cloud strength pullback setup')
+
+    def test_run_trade_agent_and_save_as_trade_idea(self):
+        with app.app_context():
+            asset = Asset(symbol='NVDA', name='NVIDIA', asset_type='equity', sector='Technology')
+            db.session.add(asset)
+            db.session.commit()
+
+            db.session.add(TickerSnapshotLatest(
+                asset_id=asset.id,
+                last_price=920.0,
+                today_change_percent=2.1,
+                market_cap=2200000000000,
+                volume=42000000,
+                avg_volume=32000000,
+                pe_ratio=41.0,
+                peg_ratio=1.5,
+                revenue_growth=0.62,
+                eps_growth=0.71,
+                moving_average_50=880.0,
+                moving_average_200=760.0,
+                quote_as_of=datetime.utcnow(),
+                fundamentals_as_of=datetime.utcnow(),
+            ))
+            for offset in range(120):
+                close = 700.0 + (offset * 1.8)
+                db.session.add(TickerDailyBar(
+                    asset_id=asset.id,
+                    bar_date=datetime.utcnow().date() - timedelta(days=(120 - offset)),
+                    open=close - 3,
+                    high=close + 5,
+                    low=close - 6,
+                    close=close,
+                    volume=25000000 + (offset * 10000),
+                    source='fake'
+                ))
+            db.session.commit()
+
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = self.owner_id
+
+        run_response = self.client.post(
+            f'/api/dashboard/{self.dashboard_id}/investing/trade-agent/run',
+            json={'symbol': 'NVDA', 'request_text': 'Analyze this as a swing long setup'}
+        )
+        self.assertEqual(run_response.status_code, 201, run_response.get_data(as_text=True))
+        payload = run_response.get_json()
+        self.assertEqual(payload['run']['symbol'], 'NVDA')
+        self.assertIn('analysis', payload['run'])
+        self.assertIn('critic', payload['run'])
+        self.assertIn('generation_mode', payload['run'])
+        self.assertIn('stage_usage', payload['run'])
+        self.assertIn('token_usage', payload['run'])
+
+        run_id = payload['run']['id']
+        save_response = self.client.post(
+            f'/api/dashboard/{self.dashboard_id}/investing/trade-agent/runs/{run_id}/save-idea'
+        )
+        self.assertEqual(save_response.status_code, 201, save_response.get_data(as_text=True))
+        save_payload = save_response.get_json()
+        self.assertEqual(save_payload['trade_idea']['asset_symbol'], 'NVDA')
+        self.assertEqual(save_payload['trade_idea']['title'], payload['run']['analysis']['title'])
+
+        with app.app_context():
+            run = TradeAgentRun.query.get(run_id)
+            self.assertIsNotNone(run)
+            self.assertIsNotNone(run.created_trade_idea_id)
+            self.assertGreaterEqual(TradeAgentEvent.query.filter_by(trade_agent_run_id=run_id).count(), 3)
+
+    def test_run_trade_agent_rejects_symbol_without_local_history(self):
+        with app.app_context():
+            asset = Asset(symbol='SHOP', name='Shopify', asset_type='equity', sector='Technology')
+            db.session.add(asset)
+            db.session.commit()
+
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = self.owner_id
+
+        response = self.client.post(
+            f'/api/dashboard/{self.dashboard_id}/investing/trade-agent/run',
+            json={'symbol': 'SHOP', 'request_text': 'Analyze this setup'}
+        )
+        self.assertEqual(response.status_code, 400, response.get_data(as_text=True))
+        self.assertIn('Not enough price history', response.get_json()['error'])
+
+    def test_trade_agent_auto_queues_fundamentals_refresh_when_fields_are_missing(self):
+        with app.app_context():
+            asset = Asset(symbol='AMD', name='AMD', asset_type='equity', sector='Technology')
+            db.session.add(asset)
+            db.session.commit()
+
+            db.session.add(TickerSnapshotLatest(
+                asset_id=asset.id,
+                last_price=182.0,
+                today_change_percent=-1.0,
+                market_cap=290000000000,
+                volume=38000000,
+                avg_volume=42000000,
+                pe_ratio=33.0,
+                moving_average_50=176.0,
+                moving_average_200=155.0,
+                quote_as_of=datetime.utcnow(),
+                fundamentals_as_of=datetime.utcnow(),
+            ))
+            db.session.add(TickerFundamentalsLatest(
+                asset_id=asset.id,
+                market_cap=290000000000,
+                pe_ratio=33.0,
+                as_of_date=datetime.utcnow().date(),
+                fetched_at=datetime.utcnow(),
+                raw_payload_json='{}'
+            ))
+            for offset in range(90):
+                close = 140.0 + (offset * 0.5)
+                db.session.add(TickerDailyBar(
+                    asset_id=asset.id,
+                    bar_date=datetime.utcnow().date() - timedelta(days=(90 - offset)),
+                    open=close - 1,
+                    high=close + 2,
+                    low=close - 2,
+                    close=close,
+                    volume=28000000 + (offset * 3000),
+                    source='fake'
+                ))
+            db.session.commit()
+
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = self.owner_id
+
+        response = self.client.post(
+            f'/api/dashboard/{self.dashboard_id}/investing/trade-agent/run',
+            json={'symbol': 'AMD', 'request_text': 'Analyze valuation and setup'}
+        )
+        self.assertEqual(response.status_code, 201, response.get_data(as_text=True))
+        payload = response.get_json()['run']
+        joined_warnings = ' '.join(payload['warnings'])
+        self.assertIn('Queued a priority fundamentals refresh for AMD', joined_warnings)
+        self.assertEqual(payload['generation_mode'], 'deterministic')
+        self.assertEqual(payload['stage_usage']['analysis'], 'heuristic')
+
+        with app.app_context():
+            fetch_state = TickerFetchState.query.filter_by(asset_id=Asset.query.filter_by(symbol='AMD').first().id).first()
+            self.assertIsNotNone(fetch_state)
+            self.assertTrue(fetch_state.is_fundamentals_pending)
+            self.assertIsNotNone(fetch_state.priority_requested_at)
+
+    def test_update_and_delete_trade_idea(self):
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = self.owner_id
+
+        create_response = self.client.post(
+            f'/api/dashboard/{self.dashboard_id}/investing/trade-ideas',
+            json={
+                'symbol': 'AAPL',
+                'title': 'Initial idea',
+                'idea_type': 'watch',
+                'thesis_summary': 'Initial thesis'
+            }
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.get_data(as_text=True))
+        idea_id = create_response.get_json()['trade_idea']['id']
+
+        update_response = self.client.put(
+            f'/api/dashboard/{self.dashboard_id}/investing/trade-ideas/{idea_id}',
+            json={
+                'symbol': 'MSFT',
+                'title': 'Updated cloud setup',
+                'idea_type': 'long',
+                'status': 'active',
+                'entry_zone': '410 - 420',
+                'target_1': '450',
+                'target_2': '470',
+                'invalidation': '398',
+                'time_horizon': '2-6 weeks',
+                'confidence_score': 72,
+                'catalysts': 'Azure strength',
+                'risks': 'Multiple compression'
+            }
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.get_data(as_text=True))
+        updated = update_response.get_json()['trade_idea']
+        self.assertEqual(updated['asset_symbol'], 'MSFT')
+        self.assertEqual(updated['title'], 'Updated cloud setup')
+        self.assertEqual(updated['target_2'], '470')
+
+        delete_response = self.client.delete(
+            f'/api/dashboard/{self.dashboard_id}/investing/trade-ideas/{idea_id}'
+        )
+        self.assertEqual(delete_response.status_code, 200, delete_response.get_data(as_text=True))
+
+        with app.app_context():
+            self.assertIsNone(TradeIdea.query.get(idea_id))
+
+    def test_list_trade_agent_runs(self):
+        with app.app_context():
+            asset = Asset(symbol='AMD', name='AMD', asset_type='equity', sector='Technology')
+            db.session.add(asset)
+            db.session.commit()
+
+            db.session.add(TickerSnapshotLatest(
+                asset_id=asset.id,
+                last_price=180.0,
+                today_change_percent=1.1,
+                market_cap=300000000000,
+                volume=50000000,
+                avg_volume=42000000,
+                moving_average_50=170.0,
+                moving_average_200=150.0,
+                quote_as_of=datetime.utcnow(),
+                fundamentals_as_of=datetime.utcnow(),
+            ))
+            for offset in range(90):
+                close = 120.0 + (offset * 0.7)
+                db.session.add(TickerDailyBar(
+                    asset_id=asset.id,
+                    bar_date=datetime.utcnow().date() - timedelta(days=(90 - offset)),
+                    open=close - 2,
+                    high=close + 4,
+                    low=close - 3,
+                    close=close,
+                    volume=30000000 + (offset * 5000),
+                    source='fake'
+                ))
+            db.session.commit()
+
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = self.owner_id
+
+        run_response = self.client.post(
+            f'/api/dashboard/{self.dashboard_id}/investing/trade-agent/run',
+            json={'symbol': 'AMD', 'request_text': 'Review this ticker'}
+        )
+        self.assertEqual(run_response.status_code, 201, run_response.get_data(as_text=True))
+
+        list_response = self.client.get(
+            f'/api/dashboard/{self.dashboard_id}/investing/trade-agent/runs'
+        )
+        self.assertEqual(list_response.status_code, 200, list_response.get_data(as_text=True))
+        runs = list_response.get_json()['runs']
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]['symbol'], 'AMD')
 
     def test_save_and_run_screener_against_cached_snapshots(self):
         with app.app_context():

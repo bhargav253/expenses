@@ -29,6 +29,7 @@ from sqlalchemy.exc import OperationalError
 from expense_agent import run_expense_analytics_agent
 from market_data import MarketDataError, MarketDataService, TradingViewScreenerError, TradingViewWatchlistScreenerService, normalize_symbol
 from ticker_ingestion import enqueue_asset_refresh
+from trade_agent import TradeAgentError, run_trade_agent_analysis, save_trade_agent_run_as_trade_idea, serialize_trade_agent_run
 
 # Security Configuration
 # ======================
@@ -871,16 +872,41 @@ def serialize_trade_idea(idea):
         'id': idea.id,
         'asset_symbol': idea.asset.symbol if idea.asset else None,
         'asset_name': idea.asset.name if idea.asset else None,
+        'source_type': idea.source_type,
         'title': idea.title,
         'idea_type': idea.idea_type,
         'status': idea.status,
         'thesis_summary': idea.thesis_summary,
         'entry_zone': idea.entry_zone,
         'target_1': idea.target_1,
+        'target_2': idea.target_2,
         'invalidation': idea.invalidation,
         'time_horizon': idea.time_horizon,
         'confidence_score': idea.confidence_score,
-        'created_at': idea.created_at.isoformat() if idea.created_at else None
+        'catalysts': idea.catalysts,
+        'risks': idea.risks,
+        'created_at': idea.created_at.isoformat() if idea.created_at else None,
+        'updated_at': idea.updated_at.isoformat() if idea.updated_at else None
+    }
+
+
+def serialize_trade_agent_run_summary(run):
+    payload = serialize_trade_agent_run(run)
+    return {
+        'id': payload['id'],
+        'symbol': payload['symbol'],
+        'asset_name': payload['asset_name'],
+        'status': payload['status'],
+        'title': payload['analysis'].get('title') if payload.get('analysis') else None,
+        'setup_type': payload['analysis'].get('setup_type') if payload.get('analysis') else None,
+        'confidence': payload['analysis'].get('confidence') if payload.get('analysis') else None,
+        'created_trade_idea_id': payload.get('created_trade_idea_id'),
+        'created_at': payload['created_at'],
+        'warnings': payload.get('warnings') or [],
+        'generation_mode': payload.get('generation_mode'),
+        'provider': payload.get('provider'),
+        'model': payload.get('model'),
+        'token_usage': payload.get('token_usage'),
     }
 
 
@@ -1907,7 +1933,7 @@ google = oauth.register(
 )
 
 # Import models
-from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar
+from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, TradeAgentRun, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar
 
 
 def ensure_schema_compatibility():
@@ -1944,12 +1970,36 @@ def ensure_schema_compatibility():
         ('total_return', 'FLOAT'),
         ('percent_price_off_10day_sma', 'FLOAT'),
         ('percent_price_off_20day_sma', 'FLOAT'),
+        ('price_to_sales', 'FLOAT'),
+        ('gross_margin', 'FLOAT'),
+        ('operating_margin', 'FLOAT'),
+        ('free_cash_flow', 'FLOAT'),
+        ('debt_to_equity', 'FLOAT'),
+        ('return_on_equity', 'FLOAT'),
+    ])
+    ensure_columns('ticker_fundamentals_latest', [
+        ('forward_pe', 'FLOAT'),
+        ('price_to_sales', 'FLOAT'),
+        ('revenue_growth', 'FLOAT'),
+        ('eps_growth', 'FLOAT'),
+        ('gross_margin', 'FLOAT'),
+        ('operating_margin', 'FLOAT'),
+        ('free_cash_flow', 'FLOAT'),
+        ('debt_to_equity', 'FLOAT'),
+        ('return_on_equity', 'FLOAT'),
     ])
     ensure_columns('ticker_fetch_state', [
         ('priority_requested_at', 'DATETIME'),
         ('last_market_refresh_at', 'DATETIME'),
         ('last_market_close_trade_date', 'DATE'),
         ('last_fundamentals_trade_date', 'DATE'),
+    ])
+    ensure_columns('trade_agent_run', [
+        ('generation_mode', "VARCHAR(50) DEFAULT 'deterministic'"),
+        ('provider_name', 'VARCHAR(50)'),
+        ('model_name', 'VARCHAR(100)'),
+        ('stage_usage_json', 'TEXT'),
+        ('token_usage_json', 'TEXT'),
     ])
 
 
@@ -2306,6 +2356,12 @@ def investing_workspace(dashboard_id):
     serialized_selected_watchlist = serialize_watchlist(selected_watchlist) if selected_watchlist else None
     trade_ideas = TradeIdea.query.filter_by(dashboard_id=dashboard_id).order_by(TradeIdea.created_at.desc()).all()
     serialized_trade_ideas = [serialize_trade_idea(idea) for idea in trade_ideas]
+    trade_agent_runs = (
+        TradeAgentRun.query.filter_by(dashboard_id=dashboard_id)
+        .order_by(TradeAgentRun.created_at.desc())
+        .limit(5)
+        .all()
+    )
     screeners = ScreenerDefinition.query.filter_by(dashboard_id=dashboard_id, is_archived=False).order_by(ScreenerDefinition.updated_at.desc()).all()
     serialized_screeners = [serialize_screener_definition(screener) for screener in screeners]
     return render_template(
@@ -2314,6 +2370,7 @@ def investing_workspace(dashboard_id):
         watchlists=serialized_watchlists,
         selected_watchlist=serialized_selected_watchlist,
         trade_ideas=serialized_trade_ideas,
+        recent_trade_agent_runs=[serialize_trade_agent_run_summary(run) for run in trade_agent_runs],
         screeners=serialized_screeners,
         selected_screener=serialize_screener_definition(selected_screener) if selected_screener else None,
         screener_criteria=serialize_screener_criteria(),
@@ -2704,6 +2761,103 @@ def get_trade_ideas(dashboard_id):
     return jsonify({'trade_ideas': [serialize_trade_idea(idea) for idea in ideas]})
 
 
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trade-agent/run', methods=['POST'])
+def run_trade_agent(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    data = request.get_json() or {}
+    symbol = normalize_symbol(data.get('symbol'))
+    request_text = (data.get('request_text') or '').strip()
+    if not symbol:
+        return jsonify({'error': 'Symbol is required'}), 400
+
+    try:
+        run = run_trade_agent_analysis(
+            dashboard_id=dashboard_id,
+            symbol=symbol,
+            request_text=request_text,
+            user_id=session['user_id']
+        )
+        return jsonify({
+            'message': 'Trade-agent analysis completed successfully',
+            'run': serialize_trade_agent_run(run)
+        }), 201
+    except TradeAgentError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("Failed to run trade agent", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+        return jsonify({'error': f'Failed to run trade agent: {exc}'}), 500
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trade-agent/runs/<int:run_id>', methods=['GET'])
+def get_trade_agent_run(dashboard_id, run_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    run = TradeAgentRun.query.filter_by(id=run_id, dashboard_id=dashboard_id).first()
+    if not run:
+        return jsonify({'error': 'Trade-agent run not found'}), 404
+
+    return jsonify({'run': serialize_trade_agent_run(run)})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trade-agent/runs', methods=['GET'])
+def list_trade_agent_runs(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    runs = (
+        TradeAgentRun.query.filter_by(dashboard_id=dashboard_id)
+        .order_by(TradeAgentRun.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    return jsonify({'runs': [serialize_trade_agent_run_summary(run) for run in runs]})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trade-agent/runs/<int:run_id>/save-idea', methods=['POST'])
+def save_trade_agent_run_as_idea(dashboard_id, run_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    run = TradeAgentRun.query.filter_by(id=run_id, dashboard_id=dashboard_id).first()
+    if not run:
+        return jsonify({'error': 'Trade-agent run not found'}), 404
+
+    try:
+        idea = save_trade_agent_run_as_trade_idea(run_id, session['user_id'])
+        return jsonify({
+            'message': 'Trade-agent run saved as trade idea',
+            'trade_idea': serialize_trade_idea(idea)
+        }), 201
+    except TradeAgentError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("Failed to save trade-agent run as idea", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+        return jsonify({'error': f'Failed to save trade-agent run as idea: {exc}'}), 500
+
+
 @app.route('/api/dashboard/<int:dashboard_id>/investing/trade-ideas', methods=['POST'])
 def create_trade_idea(dashboard_id):
     if 'user_id' not in session:
@@ -2748,6 +2902,90 @@ def create_trade_idea(dashboard_id):
         db.session.rollback()
         logger.exception("Failed to create trade idea", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
         return jsonify({'error': f'Failed to create trade idea: {exc}'}), 500
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trade-ideas/<int:idea_id>', methods=['PUT'])
+def update_trade_idea(dashboard_id, idea_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    idea = TradeIdea.query.filter_by(id=idea_id, dashboard_id=dashboard_id).first()
+    if not idea:
+        return jsonify({'error': 'Trade idea not found'}), 404
+
+    data = request.get_json() or {}
+    title = (data.get('title') or '').strip()
+    symbol = normalize_symbol(data.get('symbol')) if data.get('symbol') not in (None, '') else None
+    if 'title' in data and not title:
+        return jsonify({'error': 'Title is required'}), 400
+
+    try:
+        if symbol:
+            service = get_market_data_service()
+            asset = service.get_or_create_asset(symbol)
+            enqueue_asset_refresh(asset, include_backfill=False)
+            idea.asset_id = asset.id
+        if title:
+            idea.title = title
+        if 'idea_type' in data and (data.get('idea_type') or '').strip():
+            idea.idea_type = (data.get('idea_type') or '').strip()
+        if 'status' in data and (data.get('status') or '').strip():
+            idea.status = (data.get('status') or '').strip()
+        if 'thesis_summary' in data:
+            idea.thesis_summary = (data.get('thesis_summary') or '').strip() or None
+        if 'entry_zone' in data:
+            idea.entry_zone = (data.get('entry_zone') or '').strip() or None
+        if 'target_1' in data:
+            idea.target_1 = (data.get('target_1') or '').strip() or None
+        if 'target_2' in data:
+            idea.target_2 = (data.get('target_2') or '').strip() or None
+        if 'invalidation' in data:
+            idea.invalidation = (data.get('invalidation') or '').strip() or None
+        if 'time_horizon' in data:
+            idea.time_horizon = (data.get('time_horizon') or '').strip() or None
+        if 'catalysts' in data:
+            idea.catalysts = (data.get('catalysts') or '').strip() or None
+        if 'risks' in data:
+            idea.risks = (data.get('risks') or '').strip() or None
+        if 'confidence_score' in data:
+            idea.confidence_score = _coerce_int(data.get('confidence_score'), None)
+
+        db.session.commit()
+        return jsonify({'message': 'Trade idea updated successfully', 'trade_idea': serialize_trade_idea(idea)})
+    except MarketDataError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("Failed to update trade idea", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+        return jsonify({'error': f'Failed to update trade idea: {exc}'}), 500
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trade-ideas/<int:idea_id>', methods=['DELETE'])
+def delete_trade_idea(dashboard_id, idea_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    idea = TradeIdea.query.filter_by(id=idea_id, dashboard_id=dashboard_id).first()
+    if not idea:
+        return jsonify({'error': 'Trade idea not found'}), 404
+
+    try:
+        db.session.delete(idea)
+        db.session.commit()
+        return jsonify({'message': 'Trade idea deleted successfully'})
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("Failed to delete trade idea", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+        return jsonify({'error': f'Failed to delete trade idea: {exc}'}), 500
 
 
 @app.route('/api/dashboard/<int:dashboard_id>/investing/screeners', methods=['GET'])
@@ -4370,15 +4608,30 @@ def analytics_query(dashboard_id):
         db.session.add(analytics_session)
         db.session.commit()
 
+    prior_request_context = None
+    history = analytics_session.get_history()
+    for entry in reversed(history):
+        meta = entry.get('meta') or {}
+        normalized_request = meta.get('normalized_request')
+        if normalized_request:
+            prior_request_context = normalized_request
+            break
+
     try:
         resp = run_expense_analytics_agent(
             dashboard_id=dashboard_id,
             prompt=prompt,
-            user_id=session['user_id']
+            user_id=session['user_id'],
+            prior_request_context=prior_request_context,
         )
         resp['session_id'] = analytics_session.session_id
         analytics_session.add_entry('user', prompt)
-        analytics_session.add_entry('assistant', resp.get('summary', ''), summary=resp.get('request_type'))
+        analytics_session.add_entry(
+            'assistant',
+            resp.get('summary', ''),
+            summary=resp.get('request_type'),
+            meta={'normalized_request': resp.get('normalized_request')},
+        )
         analytics_session.expires_at = now_ts + timedelta(hours=1)
         db.session.commit()
         return jsonify(resp)

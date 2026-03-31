@@ -203,6 +203,43 @@ class TradeIdea(db.Model):
     creator = db.relationship('User')
 
 
+class TradeAgentRun(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False, index=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False, index=True)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    request_text = db.Column(db.Text)
+    status = db.Column(db.String(50), default='completed')
+    analysis_json = db.Column(db.Text)
+    critic_json = db.Column(db.Text)
+    warnings_json = db.Column(db.Text)
+    data_freshness_json = db.Column(db.Text)
+    generation_mode = db.Column(db.String(50), default='deterministic')
+    provider_name = db.Column(db.String(50))
+    model_name = db.Column(db.String(100))
+    stage_usage_json = db.Column(db.Text)
+    token_usage_json = db.Column(db.Text)
+    created_trade_idea_id = db.Column(db.Integer, db.ForeignKey('trade_idea.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dashboard = db.relationship('Dashboard')
+    asset = db.relationship('Asset')
+    creator = db.relationship('User')
+    created_trade_idea = db.relationship('TradeIdea', foreign_keys=[created_trade_idea_id])
+    events = db.relationship('TradeAgentEvent', back_populates='run', cascade='all, delete-orphan')
+
+
+class TradeAgentEvent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    trade_agent_run_id = db.Column(db.Integer, db.ForeignKey('trade_agent_run.id'), nullable=False, index=True)
+    event_type = db.Column(db.String(100), nullable=False)
+    event_payload_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    run = db.relationship('TradeAgentRun', back_populates='events')
+
+
 class MarketSnapshot(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False)
@@ -267,10 +304,16 @@ class TickerSnapshotLatest(db.Model):
     pe_ratio = db.Column(db.Float)
     peg_ratio = db.Column(db.Float)
     forward_pe = db.Column(db.Float)
+    price_to_sales = db.Column(db.Float)
     revenue_growth = db.Column(db.Float)
     eps_growth = db.Column(db.Float)
     revenue = db.Column(db.Float)
     dividend_yield = db.Column(db.Float)
+    gross_margin = db.Column(db.Float)
+    operating_margin = db.Column(db.Float)
+    free_cash_flow = db.Column(db.Float)
+    debt_to_equity = db.Column(db.Float)
+    return_on_equity = db.Column(db.Float)
     fifty_two_week_high = db.Column(db.Float)
     fifty_two_week_low = db.Column(db.Float)
     days_since_52_week_high = db.Column(db.Integer)
@@ -344,8 +387,17 @@ class TickerFundamentalsLatest(db.Model):
     asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False, unique=True, index=True)
     market_cap = db.Column(db.Float)
     pe_ratio = db.Column(db.Float)
+    forward_pe = db.Column(db.Float)
     peg_ratio = db.Column(db.Float)
+    price_to_sales = db.Column(db.Float)
+    revenue_growth = db.Column(db.Float)
+    eps_growth = db.Column(db.Float)
+    gross_margin = db.Column(db.Float)
+    operating_margin = db.Column(db.Float)
     revenue = db.Column(db.Float)
+    free_cash_flow = db.Column(db.Float)
+    debt_to_equity = db.Column(db.Float)
+    return_on_equity = db.Column(db.Float)
     dividend_yield = db.Column(db.Float)
     shares_outstanding = db.Column(db.Float)
     as_of_date = db.Column(db.Date)
@@ -518,14 +570,17 @@ class AnalyticsSession(db.Model):
                 return []
         return []
 
-    def add_entry(self, role, content, summary=None):
+    def add_entry(self, role, content, summary=None, meta=None):
         history = self.get_history()
-        history.append({
+        entry = {
             'role': role,
             'content': content,
             'summary': summary,
             'timestamp': datetime.utcnow().isoformat()
-        })
+        }
+        if meta is not None:
+            entry['meta'] = meta
+        history.append(entry)
         self.conversation_history = json.dumps(history)
 
 class UserDashboardSettings(db.Model):

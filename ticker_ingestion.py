@@ -339,8 +339,17 @@ def refresh_ticker_snapshot_from_sources(asset: Asset, quote_payload: dict | Non
     snapshot.today_change_percent = _performance_percent(current_price, previous_close)
     snapshot.market_cap = fundamentals.market_cap if fundamentals else snapshot.market_cap
     snapshot.pe_ratio = fundamentals.pe_ratio if fundamentals else snapshot.pe_ratio
+    snapshot.forward_pe = fundamentals.forward_pe if fundamentals else snapshot.forward_pe
     snapshot.peg_ratio = fundamentals.peg_ratio if fundamentals else snapshot.peg_ratio
+    snapshot.price_to_sales = fundamentals.price_to_sales if fundamentals else snapshot.price_to_sales
+    snapshot.revenue_growth = fundamentals.revenue_growth if fundamentals else snapshot.revenue_growth
+    snapshot.eps_growth = fundamentals.eps_growth if fundamentals else snapshot.eps_growth
     snapshot.revenue = fundamentals.revenue if fundamentals else snapshot.revenue
+    snapshot.gross_margin = fundamentals.gross_margin if fundamentals else snapshot.gross_margin
+    snapshot.operating_margin = fundamentals.operating_margin if fundamentals else snapshot.operating_margin
+    snapshot.free_cash_flow = fundamentals.free_cash_flow if fundamentals else snapshot.free_cash_flow
+    snapshot.debt_to_equity = fundamentals.debt_to_equity if fundamentals else snapshot.debt_to_equity
+    snapshot.return_on_equity = fundamentals.return_on_equity if fundamentals else snapshot.return_on_equity
     snapshot.dividend_yield = fundamentals.dividend_yield if fundamentals else snapshot.dividend_yield
     snapshot.avg_volume = _average_volume(daily_bars, 20)
     snapshot.volume = latest_intraday_bar.volume if latest_intraday_bar and latest_intraday_bar.volume is not None else latest_daily_bar.volume if latest_daily_bar else None
@@ -1083,11 +1092,58 @@ class TickerIngestionWorker:
 
         fundamentals.market_cap = _safe_float(metric.get("marketCapitalization"))
         fundamentals.pe_ratio = _safe_float(metric.get("peNormalizedAnnual") or metric.get("peTTM"))
+        fundamentals.forward_pe = _safe_float(
+            metric.get("peForwardAnnual")
+            or metric.get("forwardPE")
+            or metric.get("forwardPe")
+        )
         fundamentals.peg_ratio = _safe_float(metric.get("pegRatio"))
+        fundamentals.price_to_sales = _safe_float(
+            metric.get("priceToSalesAnnual")
+            or metric.get("psTTM")
+            or metric.get("priceToSalesTTM")
+        )
+        fundamentals.revenue_growth = _safe_float(
+            metric.get("revenueGrowthTTMYoy")
+            or metric.get("revenueGrowthAnnual")
+            or metric.get("revenueGrowth5Y")
+            or metric.get("netSalesGrowthTTMYoy")
+        )
+        fundamentals.eps_growth = _safe_float(
+            metric.get("epsGrowthTTMYoy")
+            or metric.get("epsGrowthAnnual")
+            or metric.get("epsGrowth5Y")
+            or metric.get("netIncomeGrowthTTMYoy")
+        )
+        fundamentals.gross_margin = _safe_float(
+            metric.get("grossMarginTTM")
+            or metric.get("grossMarginAnnual")
+            or metric.get("grossMargin5Y")
+        )
+        fundamentals.operating_margin = _safe_float(
+            metric.get("operatingMarginTTM")
+            or metric.get("operatingMarginAnnual")
+            or metric.get("operatingMargin5Y")
+        )
         fundamentals.revenue = _safe_float(
             metric.get("totalRevenueAnnual")
             or metric.get("revenuePerShareTTM")
             or metric.get("salesPerShareTTM")
+        )
+        fundamentals.free_cash_flow = _safe_float(
+            metric.get("currentEv/freeCashFlowTTM")
+            or metric.get("freeCashFlowAnnual")
+            or metric.get("fcfMarginTTM")
+        )
+        fundamentals.debt_to_equity = _safe_float(
+            metric.get("totalDebt/totalEquityAnnual")
+            or metric.get("totalDebtToEquityQuarterly")
+            or metric.get("totalDebtToEquityAnnual")
+        )
+        fundamentals.return_on_equity = _safe_float(
+            metric.get("roeTTM")
+            or metric.get("roeAnnual")
+            or metric.get("roe5Y")
         )
         fundamentals.dividend_yield = _safe_float(
             metric.get("dividendYieldIndicatedAnnual")

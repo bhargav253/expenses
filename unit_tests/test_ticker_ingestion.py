@@ -35,8 +35,17 @@ class FakeFinnhubClient:
             "metric": {
                 "marketCapitalization": 1500000000,
                 "peNormalizedAnnual": 21.5,
+                "peForwardAnnual": 18.3,
                 "pegRatio": 1.8,
+                "priceToSalesAnnual": 4.2,
+                "revenueGrowthTTMYoy": 22.0,
+                "epsGrowthTTMYoy": 31.0,
+                "grossMarginTTM": 68.0,
+                "operatingMarginTTM": 31.0,
                 "totalRevenueAnnual": 184000000.0,
+                "currentEv/freeCashFlowTTM": 25.0,
+                "totalDebt/totalEquityAnnual": 0.45,
+                "roeTTM": 19.0,
                 "dividendYieldIndicatedAnnual": 0.8,
                 "shareOutstanding": 25000000,
             }
@@ -129,6 +138,11 @@ class TestTickerIngestionWorker(unittest.TestCase):
             self.assertEqual(asset.name, "WORK Corp")
             self.assertAlmostEqual(snapshot.last_price, 110.0, places=2)
             self.assertAlmostEqual(snapshot.pe_ratio, 21.5, places=2)
+            self.assertAlmostEqual(snapshot.forward_pe, 18.3, places=2)
+            self.assertAlmostEqual(snapshot.revenue_growth, 22.0, places=2)
+            self.assertAlmostEqual(snapshot.eps_growth, 31.0, places=2)
+            self.assertAlmostEqual(fundamentals.return_on_equity, 19.0, places=2)
+            self.assertAlmostEqual(fundamentals.debt_to_equity, 0.45, places=2)
             self.assertGreater(TickerIntradayBar.query.filter_by(asset_id=self.asset_id).count(), 0)
 
     def test_worker_allows_priority_catchup_refresh_on_non_trading_day_when_db_is_stale(self):

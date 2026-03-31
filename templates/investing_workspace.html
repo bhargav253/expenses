@@ -196,48 +196,79 @@
         opacity: 1;
     }
 
-    .investing-layout.is-tools-collapsed #workspaceToolsColumn {
-        flex: 0 0 1.6rem;
-        max-width: 1.6rem;
-        padding-right: 0;
+    .workspace-rail-column,
+    #workspaceMainColumn {
+        position: relative;
     }
 
-    .investing-layout.is-tools-collapsed #workspaceToolsColumn .tools-pane-content {
-        display: none;
+    .workspace-rail-column {
+        display: flex;
     }
 
-    .investing-layout.is-tools-collapsed #workspaceMainColumn {
-        flex: 0 0 calc(100% - 1.6rem);
-        max-width: calc(100% - 1.6rem);
-    }
-
-    .tools-pane-toggle {
-        width: 2rem;
-        height: 2rem;
-        padding: 0;
-        border-radius: 999px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .tools-pane-reopen {
-        display: none;
+    .workspace-rail-shell {
         position: sticky;
-        top: 0.25rem;
-        left: 0;
+        top: 1rem;
+        width: 100%;
+        height: 100%;
+    }
+
+    .workspace-rail-column.is-collapsed {
+        flex: 0 0 2.75rem;
+        width: 2.75rem;
+        max-width: 2.75rem;
+    }
+
+    .workspace-rail-shell.is-collapsed {
+        width: 2.75rem;
+    }
+
+    .workspace-rail-shell.is-collapsed .workspace-rail-body,
+    .workspace-rail-shell.is-collapsed .workspace-rail-title-text,
+    .workspace-rail-shell.is-collapsed .workspace-rail-subtitle {
+        display: none;
+    }
+
+    .workspace-rail-shell.is-collapsed .workspace-rail-header {
+        justify-content: center;
+        padding-inline: 0.5rem;
+    }
+
+    .workspace-rail-shell.is-collapsed .workspace-rail-toggle {
+        margin-left: 0;
+    }
+
+    .workspace-rail-column.is-collapsed .card-header {
+        border-bottom: 0;
+        padding-block: 0.9rem;
+        min-height: 100%;
+        align-items: flex-start;
+        justify-content: center;
+    }
+
+    .workspace-rail-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+    }
+
+    .workspace-rail-toggle {
         width: 2rem;
         height: 2rem;
         padding: 0;
         border-radius: 999px;
+        display: inline-flex;
         align-items: center;
         justify-content: center;
-        z-index: 7;
-        box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
     }
 
-    .investing-layout.is-tools-collapsed .tools-pane-reopen {
-        display: inline-flex;
+    .workspace-agent-card .card-body {
+        min-height: 32rem;
+    }
+
+    .workspace-agent-card .list-group-flush {
+        max-height: 18rem;
+        overflow-y: auto;
     }
 
     @media (max-width: 1199.98px) {
@@ -246,6 +277,14 @@
             border-bottom: 1px solid rgba(15, 23, 42, 0.08);
             padding-bottom: 1rem;
             margin-bottom: 1rem;
+        }
+
+        .workspace-rail-shell {
+            position: static;
+        }
+
+        .workspace-agent-card .card-body {
+            min-height: auto;
         }
     }
 </style>
@@ -269,14 +308,21 @@
 </div>
 
 <div class="row g-4 investing-layout" id="investingWorkspaceLayout">
-    <div class="col-xl-4" id="workspaceToolsColumn">
-        <div class="tools-pane-content">
+    <div class="col-xl-3 workspace-rail-column" id="workspaceToolsColumn">
+        <div class="card shadow-sm workspace-rail-shell" id="workspaceToolsRail">
+            <div class="card-header bg-white workspace-rail-header">
+                <div>
+                    <h5 class="mb-1 workspace-rail-title-text"><i class="fas fa-compass me-2 text-primary"></i>Workspace Tools</h5>
+                    <div class="small text-muted workspace-rail-subtitle">Create watchlists and capture manual trade ideas from the left rail.</div>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary workspace-rail-toggle" id="workspaceToolsCollapseBtn" aria-label="Collapse tools rail" aria-expanded="true" title="Collapse tools rail">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+            </div>
+            <div class="card-body workspace-rail-body">
             <div class="card shadow-sm mb-4">
-                <div class="card-header bg-white d-flex align-items-center justify-content-between gap-2">
+                <div class="card-header bg-white">
                     <h5 class="mb-0"><i class="fas fa-plus-circle me-2 text-primary"></i>Create Watchlist</h5>
-                    <button type="button" class="btn btn-sm btn-outline-secondary tools-pane-toggle" id="workspaceToolsCollapseBtn" aria-label="Collapse tools panel" aria-expanded="true" title="Collapse tools panel">
-                        <i class="fas fa-chevron-left"></i>
-                    </button>
                 </div>
                 <div class="card-body">
                     <form id="createWatchlistForm">
@@ -330,28 +376,11 @@
                 </div>
             </div>
 
-            <div class="card shadow-sm">
-                <div class="card-header bg-white">
-                    <h6 class="mb-0"><i class="fas fa-robot me-2 text-primary"></i>Agentic Research Layer</h6>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted">The next layer is a bounded research flow over cached watchlist context and market data, not a generic chat box.</p>
-                    <ol class="list-group list-group-numbered">
-                        <li class="list-group-item border-0 px-0">Classify the request</li>
-                        <li class="list-group-item border-0 px-0">Plan the research steps</li>
-                        <li class="list-group-item border-0 px-0">Call market and watchlist tools</li>
-                        <li class="list-group-item border-0 px-0">Produce a structured report</li>
-                        <li class="list-group-item border-0 px-0">Run a critic pass and save the trace</li>
-                    </ol>
-                </div>
             </div>
         </div>
     </div>
 
-    <div class="col-xl-8" id="workspaceMainColumn">
-        <button type="button" class="btn btn-sm btn-outline-secondary tools-pane-reopen" id="workspaceToolsExpandBtn" aria-label="Show tools panel" title="Show tools panel">
-            <i class="fas fa-chevron-right"></i>
-        </button>
+    <div class="col-xl-6" id="workspaceMainColumn">
         <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center mb-3 gap-2">
             <div class="d-flex align-items-center gap-2">
                 <h5 class="mb-0"><i class="fas fa-filter me-2 text-primary"></i>Screeners</h5>
@@ -584,19 +613,42 @@
             <span class="badge bg-light text-dark">{{ trade_ideas|length }} ideas</span>
         </div>
 
+        <div class="card shadow-sm mb-4 d-none" id="tradeAgentResultCard">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
+                <div>
+                    <div class="fw-semibold"><i class="fas fa-brain me-2 text-primary"></i>Trade Agent Result</div>
+                    <div class="small text-muted" id="tradeAgentResultMeta">Waiting for analysis.</div>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-primary d-none" id="saveTradeAgentIdeaBtn">
+                    <i class="fas fa-floppy-disk me-1"></i>Save As Trade Idea
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="tradeAgentResultBody"></div>
+            </div>
+        </div>
+
         <div class="card shadow-sm">
             <div class="card-body">
                 {% if trade_ideas %}
                 <div class="row g-3">
                     {% for idea in trade_ideas %}
                     <div class="col-md-6">
-                        <div class="border rounded-3 p-3 h-100">
+                        <div class="border rounded-3 p-3 h-100 trade-idea-card" data-trade-idea='{{ idea|tojson|safe }}'>
                             <div class="d-flex justify-content-between align-items-start mb-2">
                                 <div>
                                     <div class="fw-bold">{{ idea.title }}</div>
                                     <div class="small text-muted">{{ idea.asset_symbol }}{% if idea.asset_name %} · {{ idea.asset_name }}{% endif %}</div>
                                 </div>
-                                <span class="badge bg-light text-dark text-uppercase">{{ idea.idea_type }}</span>
+                                <div class="d-flex align-items-center gap-2">
+                                    <span class="badge bg-light text-dark text-uppercase">{{ idea.idea_type }}</span>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary edit-trade-idea-btn">
+                                        <i class="fas fa-pen"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-danger delete-trade-idea-btn" data-trade-idea-id="{{ idea.id }}">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </div>
                             </div>
                             {% if idea.thesis_summary %}
                             <div class="small text-muted mb-2">{{ idea.thesis_summary }}</div>
@@ -606,6 +658,7 @@
                                 {% if idea.entry_zone %}<div><span class="text-muted">Entry:</span> {{ idea.entry_zone }}</div>{% endif %}
                                 {% if idea.target_1 %}<div><span class="text-muted">Target:</span> {{ idea.target_1 }}</div>{% endif %}
                                 {% if idea.invalidation %}<div><span class="text-muted">Invalidation:</span> {{ idea.invalidation }}</div>{% endif %}
+                                {% if idea.source_type %}<div><span class="text-muted">Source:</span> {{ idea.source_type }}</div>{% endif %}
                             </div>
                         </div>
                     </div>
@@ -614,6 +667,163 @@
                 {% else %}
                 <div class="text-muted small">No trade ideas yet.</div>
                 {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-3 workspace-rail-column" id="workspaceAgentColumn">
+        <div class="card shadow-sm workspace-rail-shell workspace-agent-card" id="workspaceAgentRail">
+            <div class="card-header bg-white workspace-rail-header">
+                <div>
+                    <h5 class="mb-1 workspace-rail-title-text"><i class="fas fa-robot me-2 text-primary"></i>AI Research Rail</h5>
+                    <div class="small text-muted workspace-rail-subtitle">Run trade analysis from the right rail and review recent agent output without leaving the workspace.</div>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary workspace-rail-toggle" id="workspaceAgentCollapseBtn" aria-label="Collapse AI research rail" aria-expanded="true" title="Collapse AI research rail">
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+            </div>
+            <div class="card-body workspace-rail-body">
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header bg-white">
+                        <h6 class="mb-0"><i class="fas fa-satellite-dish me-2 text-primary"></i>Trade Agent</h6>
+                    </div>
+                    <div class="card-body">
+                        <form id="tradeAgentForm" class="d-grid gap-3">
+                            <div>
+                                <label for="tradeAgentSymbol" class="form-label">Ticker</label>
+                                <input type="text" class="form-control" id="tradeAgentSymbol" maxlength="16" placeholder="NVDA" required>
+                            </div>
+                            <div>
+                                <label for="tradeAgentPrompt" class="form-label">Research Request</label>
+                                <textarea class="form-control" id="tradeAgentPrompt" rows="5" placeholder="Analyze this as a swing long. Focus on trend quality, risks, and useful levels."></textarea>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100" id="tradeAgentRunBtn">
+                                <i class="fas fa-satellite-dish me-1"></i>Run Trade Agent
+                            </button>
+                        </form>
+                        <div class="small text-muted mt-3">
+                            Uses cached market data, local daily bars, and a bounded synthesis/critic workflow. This is research support, not automated trading.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <div class="fw-semibold"><i class="fas fa-clock-rotate-left me-2 text-primary"></i>Recent Trade-Agent Runs</div>
+                        <span class="badge bg-light text-dark">{{ recent_trade_agent_runs|length }} recent</span>
+                    </div>
+                    <div class="card-body">
+                        {% if recent_trade_agent_runs %}
+                        <div class="list-group list-group-flush" id="tradeAgentRunHistoryList">
+                            {% for run in recent_trade_agent_runs %}
+                            <div class="list-group-item px-0">
+                                <div class="d-flex justify-content-between align-items-start gap-3">
+                                    <div>
+                                        <div class="fw-semibold">{{ run.symbol }}{% if run.title %} · {{ run.title }}{% endif %}</div>
+                                        <div class="small text-muted text-uppercase">{{ run.setup_type or 'setup' }} · {{ run.confidence or 'unknown confidence' }}</div>
+                                        <div class="small text-muted">{{ run.created_at }}</div>
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary view-trade-agent-run-btn" data-run-id="{{ run.id }}">
+                                            View
+                                        </button>
+                                        {% if run.created_trade_idea_id %}
+                                        <span class="badge bg-success-subtle text-success border align-self-center">Saved</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <div class="text-muted small" id="tradeAgentRunHistoryEmpty">No trade-agent runs yet.</div>
+                        <div class="list-group list-group-flush d-none" id="tradeAgentRunHistoryList"></div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="editTradeIdeaModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Trade Idea</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editTradeIdeaForm" class="row g-3">
+                    <input type="hidden" id="editTradeIdeaId">
+                    <div class="col-md-4">
+                        <label class="form-label" for="editTradeIdeaSymbol">Symbol</label>
+                        <input type="text" class="form-control" id="editTradeIdeaSymbol" maxlength="16">
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label" for="editTradeIdeaTitle">Title</label>
+                        <input type="text" class="form-control" id="editTradeIdeaTitle" maxlength="255" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="editTradeIdeaType">Type</label>
+                        <select class="form-select" id="editTradeIdeaType">
+                            <option value="watch">Watch</option>
+                            <option value="long">Long</option>
+                            <option value="short">Short</option>
+                            <option value="options">Options</option>
+                            <option value="avoid">Avoid</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="editTradeIdeaStatus">Status</label>
+                        <select class="form-select" id="editTradeIdeaStatus">
+                            <option value="active">Active</option>
+                            <option value="invalidated">Invalidated</option>
+                            <option value="played_out">Played Out</option>
+                            <option value="archived">Archived</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="editTradeIdeaConfidence">Confidence</label>
+                        <input type="number" class="form-control" id="editTradeIdeaConfidence" min="1" max="100">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="editTradeIdeaThesis">Thesis</label>
+                        <textarea class="form-control" id="editTradeIdeaThesis" rows="3"></textarea>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="editTradeIdeaEntry">Entry</label>
+                        <input type="text" class="form-control" id="editTradeIdeaEntry">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="editTradeIdeaTarget1">Target 1</label>
+                        <input type="text" class="form-control" id="editTradeIdeaTarget1">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="editTradeIdeaTarget2">Target 2</label>
+                        <input type="text" class="form-control" id="editTradeIdeaTarget2">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="editTradeIdeaInvalidation">Invalidation</label>
+                        <input type="text" class="form-control" id="editTradeIdeaInvalidation">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="editTradeIdeaHorizon">Time Horizon</label>
+                        <input type="text" class="form-control" id="editTradeIdeaHorizon">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="editTradeIdeaCatalysts">Catalysts</label>
+                        <textarea class="form-control" id="editTradeIdeaCatalysts" rows="2"></textarea>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="editTradeIdeaRisks">Risks</label>
+                        <textarea class="form-control" id="editTradeIdeaRisks" rows="2"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveTradeIdeaChangesBtn">Save Changes</button>
             </div>
         </div>
     </div>
@@ -626,6 +836,7 @@
 <script nonce="{{ csp_nonce() }}">
     const investingDashboardId = {{ dashboard.id }};
     const investingSavedScreeners = {{ screeners|tojson }};
+    const recentTradeAgentRuns = {{ recent_trade_agent_runs|tojson }};
     const selectedInvestingScreener = {{ selected_screener|tojson }};
     const investingScreenerCriteria = {{ screener_criteria|tojson }};
     const defaultScreenerWatchlistId = {{ default_screener_watchlist_id|tojson }};
@@ -687,6 +898,31 @@
                 body: data
             });
         },
+        runTradeAgent(data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-agent/run`, {
+                method: 'POST',
+                body: data
+            });
+        },
+        saveTradeAgentIdea(runId) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-agent/runs/${runId}/save-idea`, {
+                method: 'POST'
+            });
+        },
+        getTradeAgentRun(runId) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-agent/runs/${runId}`);
+        },
+        updateTradeIdea(ideaId, data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-ideas/${ideaId}`, {
+                method: 'PUT',
+                body: data
+            });
+        },
+        deleteTradeIdea(ideaId) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-ideas/${ideaId}`, {
+                method: 'DELETE'
+            });
+        },
         saveScreener(data) {
             return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/screeners`, {
                 method: 'POST',
@@ -704,15 +940,29 @@
     document.addEventListener('DOMContentLoaded', () => {
         const workspaceLayout = document.getElementById('investingWorkspaceLayout');
         const workspaceToolsColumn = document.getElementById('workspaceToolsColumn');
+        const workspaceToolsRail = document.getElementById('workspaceToolsRail');
         const workspaceMainColumn = document.getElementById('workspaceMainColumn');
+        const workspaceAgentColumn = document.getElementById('workspaceAgentColumn');
+        const workspaceAgentRail = document.getElementById('workspaceAgentRail');
         const workspaceToolsCollapseBtn = document.getElementById('workspaceToolsCollapseBtn');
-        const workspaceToolsExpandBtn = document.getElementById('workspaceToolsExpandBtn');
+        const workspaceAgentCollapseBtn = document.getElementById('workspaceAgentCollapseBtn');
         const createForm = document.getElementById('createWatchlistForm');
         const createTradeIdeaForm = document.getElementById('createTradeIdeaForm');
         const screenerForm = document.getElementById('screenerForm');
         const saveScreenerBtn = document.getElementById('saveScreenerBtn');
         const selectedScreenerIdSelect = document.getElementById('selectedScreenerId');
         const selectedWatchlistIdSelect = document.getElementById('selectedWatchlistId');
+        const tradeAgentForm = document.getElementById('tradeAgentForm');
+        const tradeAgentRunBtn = document.getElementById('tradeAgentRunBtn');
+        const tradeAgentResultCard = document.getElementById('tradeAgentResultCard');
+        const tradeAgentResultBody = document.getElementById('tradeAgentResultBody');
+        const tradeAgentResultMeta = document.getElementById('tradeAgentResultMeta');
+        const saveTradeAgentIdeaBtn = document.getElementById('saveTradeAgentIdeaBtn');
+        const tradeAgentRunHistoryList = document.getElementById('tradeAgentRunHistoryList');
+        const tradeAgentRunHistoryEmpty = document.getElementById('tradeAgentRunHistoryEmpty');
+        const editTradeIdeaModalElement = document.getElementById('editTradeIdeaModal');
+        const editTradeIdeaForm = document.getElementById('editTradeIdeaForm');
+        const saveTradeIdeaChangesBtn = document.getElementById('saveTradeIdeaChangesBtn');
         const screenerResultsShell = document.getElementById('screenerResultsShell');
         const screenerLoadingOverlay = document.getElementById('screenerLoadingOverlay');
         const screenerResultsEmpty = document.getElementById('screenerResultsEmpty');
@@ -737,37 +987,77 @@
         let activeScreenerCriteria = [];
         const assetRefreshPollHandles = new Map();
         const workspaceToolsStorageKey = 'investingWorkspaceToolsCollapsed';
+        const workspaceAgentStorageKey = 'investingWorkspaceAgentCollapsed';
+        let latestTradeAgentRunId = null;
+        const editTradeIdeaModal = editTradeIdeaModalElement && window.bootstrap ? new bootstrap.Modal(editTradeIdeaModalElement) : null;
 
-        function setWorkspaceToolsCollapsed(isCollapsed) {
-            if (!workspaceLayout || !workspaceToolsColumn || !workspaceMainColumn) {
+        function setColumnWidth(element, widthClass) {
+            if (!element) {
                 return;
             }
-            workspaceLayout.classList.toggle('is-tools-collapsed', isCollapsed);
-            workspaceMainColumn.classList.toggle('col-xl-8', !isCollapsed);
-            workspaceMainColumn.classList.toggle('col-xl-12', isCollapsed);
-            if (workspaceToolsCollapseBtn) {
-                workspaceToolsCollapseBtn.setAttribute('aria-expanded', String(!isCollapsed));
+            ['col-xl-3', 'col-xl-6', 'col-xl-8', 'col-xl-10'].forEach((className) => {
+                element.classList.remove(className);
+            });
+            if (widthClass) {
+                element.classList.add(widthClass);
             }
-            if (workspaceToolsExpandBtn) {
-                workspaceToolsExpandBtn.setAttribute('aria-expanded', String(isCollapsed));
-            }
-            window.localStorage.setItem(workspaceToolsStorageKey, isCollapsed ? 'true' : 'false');
         }
 
-        const savedToolsState = window.localStorage.getItem(workspaceToolsStorageKey) === 'true';
-        setWorkspaceToolsCollapsed(savedToolsState);
+        function syncWorkspaceRails() {
+            if (!workspaceLayout || !workspaceToolsColumn || !workspaceMainColumn || !workspaceAgentColumn) {
+                return;
+            }
+            const toolsCollapsed = window.localStorage.getItem(workspaceToolsStorageKey) === 'true';
+            const agentCollapsed = window.localStorage.getItem(workspaceAgentStorageKey) === 'true';
+
+            workspaceLayout.classList.toggle('is-tools-collapsed', toolsCollapsed);
+            workspaceLayout.classList.toggle('is-agent-collapsed', agentCollapsed);
+            workspaceToolsColumn.classList.toggle('is-collapsed', toolsCollapsed);
+            workspaceAgentColumn.classList.toggle('is-collapsed', agentCollapsed);
+            workspaceToolsRail?.classList.toggle('is-collapsed', toolsCollapsed);
+            workspaceAgentRail?.classList.toggle('is-collapsed', agentCollapsed);
+
+            setColumnWidth(workspaceToolsColumn, toolsCollapsed ? '' : 'col-xl-3');
+            setColumnWidth(workspaceAgentColumn, agentCollapsed ? '' : 'col-xl-3');
+
+            if (toolsCollapsed && agentCollapsed) {
+                setColumnWidth(workspaceMainColumn, 'col-xl-10');
+            } else if (toolsCollapsed || agentCollapsed) {
+                setColumnWidth(workspaceMainColumn, 'col-xl-8');
+            } else {
+                setColumnWidth(workspaceMainColumn, 'col-xl-6');
+            }
+
+            if (workspaceToolsCollapseBtn) {
+                workspaceToolsCollapseBtn.setAttribute('aria-expanded', String(!toolsCollapsed));
+                workspaceToolsCollapseBtn.setAttribute('title', toolsCollapsed ? 'Expand tools rail' : 'Collapse tools rail');
+                workspaceToolsCollapseBtn.innerHTML = `<i class="fas fa-chevron-${toolsCollapsed ? 'right' : 'left'}"></i>`;
+            }
+
+            if (workspaceAgentCollapseBtn) {
+                workspaceAgentCollapseBtn.setAttribute('aria-expanded', String(!agentCollapsed));
+                workspaceAgentCollapseBtn.setAttribute('title', agentCollapsed ? 'Expand AI research rail' : 'Collapse AI research rail');
+                workspaceAgentCollapseBtn.innerHTML = `<i class="fas fa-chevron-${agentCollapsed ? 'left' : 'right'}"></i>`;
+            }
+        }
 
         if (workspaceToolsCollapseBtn) {
             workspaceToolsCollapseBtn.addEventListener('click', () => {
-                setWorkspaceToolsCollapsed(true);
+                const nextState = !(window.localStorage.getItem(workspaceToolsStorageKey) === 'true');
+                window.localStorage.setItem(workspaceToolsStorageKey, nextState ? 'true' : 'false');
+                syncWorkspaceRails();
             });
         }
 
-        if (workspaceToolsExpandBtn) {
-            workspaceToolsExpandBtn.addEventListener('click', () => {
-                setWorkspaceToolsCollapsed(false);
+        if (workspaceAgentCollapseBtn) {
+            workspaceAgentCollapseBtn.addEventListener('click', () => {
+                const nextState = !(window.localStorage.getItem(workspaceAgentStorageKey) === 'true');
+                window.localStorage.setItem(workspaceAgentStorageKey, nextState ? 'true' : 'false');
+                syncWorkspaceRails();
             });
         }
+
+        syncWorkspaceRails();
 
         function cloneCriteria(criteria = []) {
             return criteria.map((criterion) => ({
@@ -891,6 +1181,183 @@
         function formatPercent(value, digits = 2) {
             if (value === null || value === undefined || value === '') return 'N/A';
             return `${formatNumber(value, { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
+        }
+
+        function renderTradeAgentResult(run) {
+            if (!tradeAgentResultCard || !tradeAgentResultBody || !tradeAgentResultMeta) {
+                return;
+            }
+            latestTradeAgentRunId = run.id;
+            const analysis = run.analysis || {};
+            const critic = run.critic || {};
+            const warnings = run.warnings || [];
+            const freshness = run.data_freshness || {};
+            tradeAgentResultCard.classList.remove('d-none');
+            if (saveTradeAgentIdeaBtn) {
+                saveTradeAgentIdeaBtn.classList.toggle('d-none', Boolean(run.created_trade_idea_id));
+            }
+            tradeAgentResultMeta.textContent = `${run.symbol || ''} · snapshot ${freshness.snapshot_as_of || 'unknown'} · daily bars ${freshness.daily_bars_as_of || 'unknown'}`;
+
+            const catalysts = Array.isArray(analysis.catalysts) ? analysis.catalysts : [];
+            const risks = Array.isArray(analysis.risks) ? analysis.risks : [];
+            const criticWarnings = Array.isArray(critic.warnings) ? critic.warnings : [];
+            const tokenUsage = run.token_usage || null;
+            const stageUsage = run.stage_usage || {};
+            const tokenText = tokenUsage && tokenUsage.total_tokens ? `${tokenUsage.total_tokens} tokens` : 'N/A';
+            tradeAgentResultBody.innerHTML = `
+                <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-start gap-3 mb-3">
+                    <div>
+                        <h5 class="mb-1">${Utils.escapeHtml(analysis.title || `${run.symbol} Analysis`)}</h5>
+                        <div class="text-muted small text-uppercase">${Utils.escapeHtml(analysis.setup_type || 'setup')} · ${Utils.escapeHtml(analysis.confidence || 'unknown confidence')}</div>
+                    </div>
+                    <span class="badge bg-light text-dark text-uppercase">${Utils.escapeHtml(analysis.idea_type || 'watch')}</span>
+                </div>
+                <div class="border rounded-3 p-3 bg-light mb-3">
+                    <div class="row g-2 small">
+                        <div class="col-md-4"><span class="text-muted">Generation:</span> ${Utils.escapeHtml(run.generation_mode || 'deterministic')}</div>
+                        <div class="col-md-4"><span class="text-muted">Provider:</span> ${Utils.escapeHtml(run.provider || 'none')}</div>
+                        <div class="col-md-4"><span class="text-muted">Model:</span> ${Utils.escapeHtml(run.model || 'none')}</div>
+                        <div class="col-md-4"><span class="text-muted">Tokens:</span> ${Utils.escapeHtml(tokenText)}</div>
+                        <div class="col-md-4"><span class="text-muted">Analysis:</span> ${Utils.escapeHtml(stageUsage.analysis || 'heuristic')}</div>
+                        <div class="col-md-4"><span class="text-muted">Critic:</span> ${Utils.escapeHtml(stageUsage.critic || 'heuristic')}</div>
+                    </div>
+                </div>
+                <p class="mb-3">${Utils.escapeHtml(analysis.thesis_summary || 'No summary available.')}</p>
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <div class="border rounded-3 p-3 h-100">
+                            <div class="fw-semibold mb-2">Bull Case</div>
+                            <div class="small text-muted">${Utils.escapeHtml(analysis.bullish_case || 'N/A')}</div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="border rounded-3 p-3 h-100">
+                            <div class="fw-semibold mb-2">Bear Case</div>
+                            <div class="small text-muted">${Utils.escapeHtml(analysis.bearish_case || 'N/A')}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="row g-3 mb-3">
+                    <div class="col-md-3"><div class="small"><span class="text-muted">Entry:</span> ${Utils.escapeHtml(analysis.entry_zone || 'N/A')}</div></div>
+                    <div class="col-md-3"><div class="small"><span class="text-muted">Target 1:</span> ${Utils.escapeHtml(analysis.target_1 || 'N/A')}</div></div>
+                    <div class="col-md-3"><div class="small"><span class="text-muted">Target 2:</span> ${Utils.escapeHtml(analysis.target_2 || 'N/A')}</div></div>
+                    <div class="col-md-3"><div class="small"><span class="text-muted">Invalidation:</span> ${Utils.escapeHtml(analysis.invalidation || 'N/A')}</div></div>
+                </div>
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <div class="fw-semibold mb-2">Catalysts</div>
+                        <div class="small text-muted">${catalysts.length ? catalysts.map((item) => Utils.escapeHtml(item)).join('<br>') : 'None noted.'}</div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="fw-semibold mb-2">Risks</div>
+                        <div class="small text-muted">${risks.length ? risks.map((item) => Utils.escapeHtml(item)).join('<br>') : 'None noted.'}</div>
+                    </div>
+                </div>
+                <div class="border-top pt-3">
+                    <div class="fw-semibold mb-2">Critic Pass</div>
+                    <div class="small text-muted mb-2">${Utils.escapeHtml(critic.verdict || 'No critic verdict.')}</div>
+                    <div class="small text-muted">${criticWarnings.length ? criticWarnings.map((item) => Utils.escapeHtml(item)).join('<br>') : 'No extra critic warnings.'}</div>
+                </div>
+                ${warnings.length ? `<div class="alert alert-warning mt-3 mb-0 small">${warnings.map((item) => Utils.escapeHtml(item)).join('<br>')}</div>` : ''}
+            `;
+        }
+
+        function prependTradeAgentRunHistory(run) {
+            if (!tradeAgentRunHistoryList) {
+                return;
+            }
+            if (tradeAgentRunHistoryEmpty) {
+                tradeAgentRunHistoryEmpty.classList.add('d-none');
+            }
+            tradeAgentRunHistoryList.classList.remove('d-none');
+            const item = document.createElement('div');
+            item.className = 'list-group-item px-0';
+            item.innerHTML = `
+                <div class="d-flex justify-content-between align-items-start gap-3">
+                        <div>
+                            <div class="fw-semibold">${Utils.escapeHtml(run.symbol || '')}${run.analysis && run.analysis.title ? ` · ${Utils.escapeHtml(run.analysis.title)}` : ''}</div>
+                            <div class="small text-muted text-uppercase">${Utils.escapeHtml((run.analysis && run.analysis.setup_type) || 'setup')} · ${Utils.escapeHtml((run.analysis && run.analysis.confidence) || 'unknown confidence')}</div>
+                            <div class="small text-muted">${Utils.escapeHtml(run.created_at || '')}</div>
+                            <div class="small text-muted">${Utils.escapeHtml(run.generation_mode || 'deterministic')}${run.provider ? ` · ${Utils.escapeHtml(run.provider)}` : ''}${run.token_usage && run.token_usage.total_tokens ? ` · ${Utils.escapeHtml(String(run.token_usage.total_tokens))} tokens` : ''}</div>
+                        </div>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-secondary view-trade-agent-run-btn" data-run-id="${run.id}">View</button>
+                        ${run.created_trade_idea_id ? '<span class="badge bg-success-subtle text-success border align-self-center">Saved</span>' : ''}
+                    </div>
+                </div>
+            `;
+            tradeAgentRunHistoryList.prepend(item);
+            bindTradeAgentHistoryButtons(item);
+        }
+
+        function bindTradeAgentHistoryButtons(scope = document) {
+            scope.querySelectorAll('.view-trade-agent-run-btn').forEach((button) => {
+                if (button.dataset.bound === 'true') {
+                    return;
+                }
+                button.dataset.bound = 'true';
+                button.addEventListener('click', async () => {
+                    const runId = button.getAttribute('data-run-id');
+                    try {
+                        const payload = await InvestingApi.getTradeAgentRun(runId);
+                        renderTradeAgentResult(payload.run);
+                        tradeAgentResultCard?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    } catch (error) {
+                        Utils.showNotification(error.message || 'Failed to load trade-agent run', 'danger');
+                    }
+                });
+            });
+        }
+
+        function bindTradeIdeaButtons() {
+            document.querySelectorAll('.edit-trade-idea-btn').forEach((button) => {
+                if (button.dataset.bound === 'true') {
+                    return;
+                }
+                button.dataset.bound = 'true';
+                button.addEventListener('click', () => {
+                    const card = button.closest('.trade-idea-card');
+                    if (!card) {
+                        return;
+                    }
+                    const idea = JSON.parse(card.getAttribute('data-trade-idea'));
+                    document.getElementById('editTradeIdeaId').value = idea.id || '';
+                    document.getElementById('editTradeIdeaSymbol').value = idea.asset_symbol || '';
+                    document.getElementById('editTradeIdeaTitle').value = idea.title || '';
+                    document.getElementById('editTradeIdeaType').value = idea.idea_type || 'watch';
+                    document.getElementById('editTradeIdeaStatus').value = idea.status || 'active';
+                    document.getElementById('editTradeIdeaConfidence').value = idea.confidence_score || '';
+                    document.getElementById('editTradeIdeaThesis').value = idea.thesis_summary || '';
+                    document.getElementById('editTradeIdeaEntry').value = idea.entry_zone || '';
+                    document.getElementById('editTradeIdeaTarget1').value = idea.target_1 || '';
+                    document.getElementById('editTradeIdeaTarget2').value = idea.target_2 || '';
+                    document.getElementById('editTradeIdeaInvalidation').value = idea.invalidation || '';
+                    document.getElementById('editTradeIdeaHorizon').value = idea.time_horizon || '';
+                    document.getElementById('editTradeIdeaCatalysts').value = idea.catalysts || '';
+                    document.getElementById('editTradeIdeaRisks').value = idea.risks || '';
+                    editTradeIdeaModal?.show();
+                });
+            });
+
+            document.querySelectorAll('.delete-trade-idea-btn').forEach((button) => {
+                if (button.dataset.bound === 'true') {
+                    return;
+                }
+                button.dataset.bound = 'true';
+                button.addEventListener('click', async () => {
+                    const ideaId = button.getAttribute('data-trade-idea-id');
+                    if (!window.confirm('Delete this trade idea?')) {
+                        return;
+                    }
+                    try {
+                        await InvestingApi.deleteTradeIdea(ideaId);
+                        Utils.showNotification('Trade idea deleted', 'success');
+                        window.setTimeout(() => window.location.reload(), 300);
+                    } catch (error) {
+                        Utils.showNotification(error.message || 'Failed to delete trade idea', 'danger');
+                    }
+                });
+            });
         }
 
         function formatCriterionValue(criterionId, row) {
@@ -1178,6 +1645,90 @@
                 }
             });
         }
+
+        if (tradeAgentForm) {
+            tradeAgentForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const symbol = document.getElementById('tradeAgentSymbol').value.trim();
+                const requestText = document.getElementById('tradeAgentPrompt').value.trim();
+                if (!symbol) {
+                    Utils.showNotification('Trade-agent ticker is required', 'warning');
+                    return;
+                }
+
+                if (tradeAgentRunBtn) {
+                    tradeAgentRunBtn.disabled = true;
+                    tradeAgentRunBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Running...';
+                }
+
+                try {
+                    const payload = await InvestingApi.runTradeAgent({
+                        symbol,
+                        request_text: requestText
+                    });
+                    renderTradeAgentResult(payload.run);
+                    prependTradeAgentRunHistory(payload.run);
+                    Utils.showNotification('Trade-agent analysis completed', 'success');
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to run trade agent', 'danger');
+                } finally {
+                    if (tradeAgentRunBtn) {
+                        tradeAgentRunBtn.disabled = false;
+                        tradeAgentRunBtn.innerHTML = '<i class="fas fa-satellite-dish me-1"></i>Run Trade Agent';
+                    }
+                }
+            });
+        }
+
+        if (saveTradeAgentIdeaBtn) {
+            saveTradeAgentIdeaBtn.addEventListener('click', async () => {
+                if (!latestTradeAgentRunId) {
+                    Utils.showNotification('Run the trade agent first', 'warning');
+                    return;
+                }
+                try {
+                    await InvestingApi.saveTradeAgentIdea(latestTradeAgentRunId);
+                    Utils.showNotification('Trade idea saved from trade-agent output', 'success');
+                    window.setTimeout(() => window.location.reload(), 400);
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to save trade-agent idea', 'danger');
+                }
+            });
+        }
+
+        if (saveTradeIdeaChangesBtn) {
+            saveTradeIdeaChangesBtn.addEventListener('click', async () => {
+                const ideaId = document.getElementById('editTradeIdeaId').value;
+                if (!ideaId) {
+                    return;
+                }
+                try {
+                    await InvestingApi.updateTradeIdea(ideaId, {
+                        symbol: document.getElementById('editTradeIdeaSymbol').value.trim(),
+                        title: document.getElementById('editTradeIdeaTitle').value.trim(),
+                        idea_type: document.getElementById('editTradeIdeaType').value,
+                        status: document.getElementById('editTradeIdeaStatus').value,
+                        confidence_score: document.getElementById('editTradeIdeaConfidence').value.trim(),
+                        thesis_summary: document.getElementById('editTradeIdeaThesis').value.trim(),
+                        entry_zone: document.getElementById('editTradeIdeaEntry').value.trim(),
+                        target_1: document.getElementById('editTradeIdeaTarget1').value.trim(),
+                        target_2: document.getElementById('editTradeIdeaTarget2').value.trim(),
+                        invalidation: document.getElementById('editTradeIdeaInvalidation').value.trim(),
+                        time_horizon: document.getElementById('editTradeIdeaHorizon').value.trim(),
+                        catalysts: document.getElementById('editTradeIdeaCatalysts').value.trim(),
+                        risks: document.getElementById('editTradeIdeaRisks').value.trim()
+                    });
+                    editTradeIdeaModal?.hide();
+                    Utils.showNotification('Trade idea updated', 'success');
+                    window.setTimeout(() => window.location.reload(), 300);
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to update trade idea', 'danger');
+                }
+            });
+        }
+
+        bindTradeAgentHistoryButtons();
+        bindTradeIdeaButtons();
 
         addSymbolForms.forEach((form) => {
             form.addEventListener('submit', async (event) => {

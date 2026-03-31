@@ -6,6 +6,7 @@ class DashboardManager {
         this.dashboardId = dashboardId;
         this.currentSessionId = null;
         this.currentCsvData = null;
+        this.currentSource = null;
         this.csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
         this.isTouchDevice = this.detectTouchDevice();
         this.lastSelectionRange = null;
@@ -35,6 +36,7 @@ class DashboardManager {
     setupPdfProcessing() {
         // Setup two option layout
         this.setupOptionSelection();
+        this.setupIngressToolsPanel();
         
         // Setup Google Sheets paste functionality
         const processSheetsBtn = document.getElementById('processSheetsData');
@@ -47,7 +49,7 @@ class DashboardManager {
         }
         
         if (cancelSheetsBtn) {
-            cancelSheetsBtn.addEventListener('click', () => this.cancelOption('sheets'));
+            cancelSheetsBtn.addEventListener('click', () => this.cancelOption('paste'));
         }
         
         // Setup AI file upload
@@ -68,7 +70,89 @@ class DashboardManager {
         }
         
         if (cancelAIBtn) {
-            cancelAIBtn.addEventListener('click', () => this.cancelOption('ai'));
+            cancelAIBtn.addEventListener('click', () => this.cancelOption('upload'));
+        }
+    }
+
+    setupIngressToolsPanel() {
+        const layout = document.getElementById('ingressWorkspaceLayout');
+        const helperColumn = document.getElementById('ingressHelperColumn');
+        const helperRail = document.getElementById('ingressHelperRail');
+        const helperToggleBtn = document.getElementById('ingressHelperCollapseBtn');
+        const agentColumn = document.getElementById('ingressAgentColumn');
+        const agentRail = document.getElementById('ingressAgentRail');
+        const agentToggleBtn = document.getElementById('ingressAgentCollapseBtn');
+        const mainColumn = document.getElementById('ingressMainColumn');
+        const helperStorageKey = `ingressHelperCollapsed_${this.dashboardId}`;
+        const agentStorageKey = `ingressAgentCollapsed_${this.dashboardId}`;
+        if (!layout) return;
+
+        const setColumnWidth = (element, widths) => {
+            if (!element) {
+                return;
+            }
+            ['col-lg-3', 'col-lg-6', 'col-lg-8', 'col-lg-10', 'col-lg-12'].forEach((className) => {
+                element.classList.remove(className);
+            });
+            if (widths) {
+                element.classList.add(widths);
+            }
+        };
+
+        const syncRailState = () => {
+            const helperCollapsed = window.localStorage.getItem(helperStorageKey) === 'true';
+            const agentCollapsed = window.localStorage.getItem(agentStorageKey) === 'true';
+
+            layout.classList.toggle('is-left-collapsed', helperCollapsed);
+            layout.classList.toggle('is-right-collapsed', agentCollapsed);
+
+            if (helperColumn) helperColumn.classList.toggle('is-collapsed', helperCollapsed);
+            if (agentColumn) agentColumn.classList.toggle('is-collapsed', agentCollapsed);
+            if (helperRail) helperRail.classList.toggle('is-collapsed', helperCollapsed);
+            if (agentRail) agentRail.classList.toggle('is-collapsed', agentCollapsed);
+
+            setColumnWidth(helperColumn, helperCollapsed ? '' : 'col-lg-3');
+            setColumnWidth(agentColumn, agentCollapsed ? '' : 'col-lg-3');
+
+            if (mainColumn) {
+                if (helperCollapsed && agentCollapsed) {
+                    setColumnWidth(mainColumn, 'col-lg-10');
+                } else if (helperCollapsed || agentCollapsed) {
+                    setColumnWidth(mainColumn, 'col-lg-8');
+                } else {
+                    setColumnWidth(mainColumn, 'col-lg-6');
+                }
+            }
+
+            if (helperToggleBtn) {
+                helperToggleBtn.setAttribute('aria-expanded', String(!helperCollapsed));
+                helperToggleBtn.setAttribute('title', helperCollapsed ? 'Expand helper rail' : 'Collapse helper rail');
+                helperToggleBtn.innerHTML = `<i class="fas fa-chevron-${helperCollapsed ? 'right' : 'left'}"></i>`;
+            }
+
+            if (agentToggleBtn) {
+                agentToggleBtn.setAttribute('aria-expanded', String(!agentCollapsed));
+                agentToggleBtn.setAttribute('title', agentCollapsed ? 'Expand import assistant' : 'Collapse import assistant');
+                agentToggleBtn.innerHTML = `<i class="fas fa-chevron-${agentCollapsed ? 'left' : 'right'}"></i>`;
+            }
+        };
+
+        syncRailState();
+
+        if (helperToggleBtn) {
+            helperToggleBtn.addEventListener('click', () => {
+                const nextState = !(window.localStorage.getItem(helperStorageKey) === 'true');
+                window.localStorage.setItem(helperStorageKey, nextState ? 'true' : 'false');
+                syncRailState();
+            });
+        }
+
+        if (agentToggleBtn) {
+            agentToggleBtn.addEventListener('click', () => {
+                const nextState = !(window.localStorage.getItem(agentStorageKey) === 'true');
+                window.localStorage.setItem(agentStorageKey, nextState ? 'true' : 'false');
+                syncRailState();
+            });
         }
     }
     
@@ -96,6 +180,7 @@ class DashboardManager {
     
     selectOption(option) {
         debug.log('Selected option:', option);
+        this.currentSource = option;
         
         // Hide all option cards
         const optionCards = document.querySelectorAll('.option-card');
@@ -104,9 +189,9 @@ class DashboardManager {
         });
         
         // Show the selected option interface
-        if (option === 'sheets') {
+        if (option === 'paste') {
             this.showSheetsInterface();
-        } else if (option === 'ai') {
+        } else if (option === 'upload') {
             this.showAIInterface();
         }
     }
@@ -127,12 +212,12 @@ class DashboardManager {
         const extractionId = this.getStoredExtractionId();
 
         // Hide the current option interface
-        if (option === 'sheets') {
+        if (option === 'paste') {
             const sheetsPasteArea = document.getElementById('sheetsPasteArea');
             sheetsPasteArea.classList.add('d-none');
             const sheetsPasteText = document.getElementById('sheetsPasteText');
             sheetsPasteText.value = '';
-        } else if (option === 'ai') {
+        } else if (option === 'upload') {
             const aiUploadArea = document.getElementById('aiUploadArea');
             aiUploadArea.classList.add('d-none');
             const aiFileInput = document.getElementById('aiFileInput');
@@ -168,6 +253,7 @@ class DashboardManager {
         this.currentFileType = null;
         this.currentCsvData = null;
         this.currentSessionId = null;
+        this.currentSource = null;
         
         // Clear chat messages
         this.clearAiChat();
@@ -193,13 +279,16 @@ class DashboardManager {
         const saveCsvBtn = document.getElementById('saveCsv');
 
         if (sheetsPasteArea) sheetsPasteArea.classList.add('d-none');
+        const aiUploadArea = document.getElementById('aiUploadArea');
         if (sheetsPasteText) sheetsPasteText.value = '';
+        if (aiUploadArea) aiUploadArea.classList.add('d-none');
         if (csvPreviewArea) csvPreviewArea.classList.add('d-none');
         if (previewTable) previewTable.innerHTML = '';
         if (editableSection) editableSection.classList.add('d-none');
         if (saveCsvBtn) saveCsvBtn.disabled = true;
 
         this.editableCsvTable = null;
+        this.currentSource = null;
     }
     
     async handleAIUpload(event) {
@@ -227,9 +316,10 @@ class DashboardManager {
         localStorage.removeItem(localStorageKey);
         debug.log('Cleared localStorage for new file upload:', localStorageKey);
         
-        // Store file info for later processing
-        this.currentFile = file;
-        this.currentFileType = fileType;
+            // Store file info for later processing
+            this.currentFile = file;
+            this.currentFileType = fileType;
+            this.currentSource = 'upload';
         
         // Add file upload message to chat
         this.addAiChatMessage('user', `Uploaded file: ${file.name} (${fileType.toUpperCase()})`);
@@ -252,7 +342,7 @@ class DashboardManager {
             this.currentCsvData = csvText;
             
             // Add CSV data to chat context
-            this.addAiChatMessage('assistant', `I've loaded your CSV file. You can now ask me to process this data. For example: "Filter only transactions above $50", "Categorize expenses", or "Remove duplicate entries".`);
+            this.addAiChatMessage('assistant', `I've loaded your CSV file. You can now import it directly, edit it manually, or ask the assistant to process it. For example: "Filter only transactions above $50", "Categorize expenses", or "Remove duplicate entries".`);
             
             // Show CSV preview
             this.showCsvPreview(csvText);
@@ -340,7 +430,7 @@ class DashboardManager {
             // Seed a friendly intro if empty
             const chatMessages = document.getElementById('aiChatMessages');
             if (chatMessages && chatMessages.children.length === 0) {
-                this.addAiChatMessage('assistant', 'Hello! Upload a PDF/CSV or paste data, then tell me how to clean or categorize it.');
+                this.addAiChatMessage('assistant', 'Hello! Paste data or upload a file, then tell me how to clean, normalize, or categorize it.');
             }
         }
     }
@@ -783,6 +873,7 @@ class DashboardManager {
         this.analyticsTable = document.getElementById('analyticsTable');
         this.analyticsTableInner = document.getElementById('analyticsTableInner');
         this.analyticsChartWrapper = document.getElementById('analyticsChartWrapper');
+        this.analyticsMeta = document.getElementById('analyticsMeta');
         this.analyticsFindings = document.getElementById('analyticsFindings');
         this.analyticsWarnings = document.getElementById('analyticsWarnings');
         this.analyticsTrace = document.getElementById('analyticsTrace');
@@ -852,6 +943,10 @@ class DashboardManager {
             this.analyticsFindings.classList.add('d-none');
             this.analyticsFindings.innerHTML = '';
         }
+        if (this.analyticsMeta) {
+            this.analyticsMeta.classList.add('d-none');
+            this.analyticsMeta.innerHTML = '';
+        }
         if (this.analyticsWarnings) {
             this.analyticsWarnings.classList.add('d-none');
             this.analyticsWarnings.innerHTML = '';
@@ -900,7 +995,7 @@ class DashboardManager {
             this.analyticsChart = null;
         }
 
-        const { chart_type, labels, data, summary, rows, datasets, findings, critic, trace } = payload;
+        const { chart_type, labels, data, summary, rows, datasets, findings, critic, trace, generation_mode, planner_mode, synthesis_mode, provider, model, token_usage } = payload;
 
         // Toggle views
         if (this.analyticsChartWrapper) {
@@ -936,7 +1031,7 @@ class DashboardManager {
             if (this.analyticsSummary) {
                 this.analyticsSummary.textContent = summary || '';
             }
-            this.renderAnalyticsInsights(findings, critic, trace);
+            this.renderAnalyticsInsights(findings, critic, trace, { generation_mode, planner_mode, synthesis_mode, provider, model, token_usage });
             return;
         }
 
@@ -1001,10 +1096,39 @@ class DashboardManager {
         if (this.analyticsSummary) {
             this.analyticsSummary.textContent = summary || '';
         }
-        this.renderAnalyticsInsights(findings, critic, trace);
+        this.renderAnalyticsInsights(findings, critic, trace, { generation_mode, planner_mode, synthesis_mode, provider, model, token_usage });
     }
 
-    renderAnalyticsInsights(findings, critic, trace) {
+    renderAnalyticsInsights(findings, critic, trace, metadata = {}) {
+        if (this.analyticsMeta) {
+            const chips = [];
+            if (metadata.generation_mode) {
+                chips.push(`<span class="badge rounded-pill text-bg-${metadata.generation_mode === 'ai_assisted' ? 'primary' : 'secondary'}">Generation: ${Utils.escapeHtml(metadata.generation_mode)}</span>`);
+            }
+            if (metadata.provider) {
+                chips.push(`<span class="badge rounded-pill text-bg-light border text-dark">Provider: ${Utils.escapeHtml(metadata.provider)}</span>`);
+            }
+            if (metadata.model) {
+                chips.push(`<span class="badge rounded-pill text-bg-light border text-dark">Model: ${Utils.escapeHtml(metadata.model)}</span>`);
+            }
+            if (metadata.token_usage && metadata.token_usage.total_tokens) {
+                chips.push(`<span class="badge rounded-pill text-bg-light border text-dark">Tokens: ${Utils.escapeHtml(String(metadata.token_usage.total_tokens))}</span>`);
+            }
+            if (metadata.planner_mode) {
+                chips.push(`<span class="badge rounded-pill text-bg-light border text-dark">Planner: ${Utils.escapeHtml(metadata.planner_mode)}</span>`);
+            }
+            if (metadata.synthesis_mode) {
+                chips.push(`<span class="badge rounded-pill text-bg-light border text-dark">Synthesis: ${Utils.escapeHtml(metadata.synthesis_mode)}</span>`);
+            }
+            if (chips.length) {
+                this.analyticsMeta.innerHTML = `<div class="d-flex flex-wrap gap-2">${chips.join('')}</div>`;
+                this.analyticsMeta.classList.remove('d-none');
+            } else {
+                this.analyticsMeta.classList.add('d-none');
+                this.analyticsMeta.innerHTML = '';
+            }
+        }
+
         if (this.analyticsFindings) {
             if (findings && findings.length) {
                 const cards = findings.map((finding) => `
@@ -1040,8 +1164,12 @@ class DashboardManager {
 
         if (this.analyticsTrace) {
             const tools = (trace && trace.tools_used) || [];
+            const parts = [];
             if (tools.length) {
-                this.analyticsTrace.textContent = `Trace: ${tools.join(' -> ')}`;
+                parts.push(`Trace: ${tools.join(' -> ')}`);
+            }
+            if (parts.length) {
+                this.analyticsTrace.textContent = parts.join(' | ');
                 this.analyticsTrace.classList.remove('d-none');
             } else {
                 this.analyticsTrace.classList.add('d-none');
@@ -1095,8 +1223,8 @@ class DashboardManager {
             pastedData = (event.clipboardData || window.clipboardData).getData('text');
         } else {
             // Get data from textarea
-            const sheetsPasteArea = document.getElementById('sheetsPasteArea');
-            pastedData = sheetsPasteArea.value.trim();
+            const sheetsPasteText = document.getElementById('sheetsPasteText');
+            pastedData = sheetsPasteText ? sheetsPasteText.value.trim() : '';
         }
         
         if (!pastedData) {
@@ -1108,9 +1236,11 @@ class DashboardManager {
             // Process Google Sheets data (tab-separated values)
             const csvData = this.convertSheetsToCsv(pastedData);
             this.currentCsvData = csvData;
+            this.currentSource = 'paste';
             
             // Show CSV preview
             this.showCsvPreview(csvData);
+            this.addAiChatMessage('assistant', 'Pasted data loaded. You can import it as-is, edit it directly, or ask the assistant to clean and categorize it.');
             
             Utils.showNotification('Google Sheets data processed successfully', 'success');
         } catch (error) {
@@ -2669,7 +2799,6 @@ class DashboardManager {
         const aiUploadArea = document.getElementById('aiUploadArea');
         const processingArea = document.getElementById('processingArea');
         const csvPreviewArea = document.getElementById('csvPreviewArea');
-        const aiChatCard = document.getElementById('aiChatCard');
         
         // Reset all UI elements
         optionCards.forEach(card => {
@@ -2679,7 +2808,6 @@ class DashboardManager {
         if (aiUploadArea) aiUploadArea.classList.add('d-none');
         if (processingArea) processingArea.classList.add('d-none');
         if (csvPreviewArea) csvPreviewArea.classList.add('d-none');
-        if (aiChatCard) aiChatCard.classList.add('d-none');
         
         // Clear file inputs
         const sheetsPasteText = document.getElementById('sheetsPasteText');
@@ -2693,6 +2821,7 @@ class DashboardManager {
         this.currentFileType = null;
         this.currentCsvData = null;
         this.currentSessionId = null;
+        this.currentSource = null;
     }
 }
 
