@@ -258,7 +258,8 @@ DEFAULT_SCREENER_WATCHLIST_DESCRIPTION = 'Broad stock universe used by the facet
 DEFAULT_SAVED_SCREENER_NAME = 'Default Stock Screener'
 DEFAULT_SCREENER_MAX_CRITERIA = 5
 VISIBLE_REFRESH_SYNC_BATCH_SIZE = 10
-DEFAULT_WATCHLIST_FILE = Path(app.root_path) / 'next_plan' / 'screener' / 'default_watchlist.txt'
+DEFAULT_WATCHLIST_FILE = Path(app.root_path) / 'data' / 'default_watchlist.txt'
+LEGACY_DEFAULT_WATCHLIST_FILE = Path(app.root_path) / 'next_plan' / 'screener' / 'default_watchlist.txt'
 DEFAULT_SCREENER_SYMBOLS = None
 BACKGROUND_WATCHLIST_REFRESH_JOBS = {}
 BACKGROUND_VISIBLE_REFRESH_JOBS = {}
@@ -279,13 +280,16 @@ def load_default_screener_symbols():
 
     symbols = []
     seen = set()
-    if DEFAULT_WATCHLIST_FILE.exists():
-        for line in DEFAULT_WATCHLIST_FILE.read_text(encoding='utf-8').splitlines():
+    source_file = DEFAULT_WATCHLIST_FILE if DEFAULT_WATCHLIST_FILE.exists() else LEGACY_DEFAULT_WATCHLIST_FILE
+    if source_file.exists():
+        for line in source_file.read_text(encoding='utf-8').splitlines():
             symbol = (line or '').strip().upper()
             if not symbol or symbol in seen:
                 continue
             seen.add(symbol)
             symbols.append(symbol)
+    else:
+        logger.warning("Default screener watchlist file missing at %s", DEFAULT_WATCHLIST_FILE)
 
     DEFAULT_SCREENER_SYMBOLS = symbols
     return DEFAULT_SCREENER_SYMBOLS
