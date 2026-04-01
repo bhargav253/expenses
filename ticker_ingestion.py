@@ -39,6 +39,9 @@ DEFAULT_FUNDAMENTALS_REFRESH_INTERVAL = timedelta(hours=24)
 DEFAULT_LEASE_SECONDS = 90
 DEFAULT_YFINANCE_BATCH_SIZE = 50
 DEFAULT_YFINANCE_BATCH_INTERVAL = timedelta(seconds=30)
+DEFAULT_YFINANCE_PERIOD = os.environ.get("YFINANCE_INTRADAY_PERIOD", "1d")
+DEFAULT_YFINANCE_INTERVAL = os.environ.get("YFINANCE_INTRADAY_INTERVAL", "1h")
+DEFAULT_INTRADAY_RETENTION_HOURS = int(os.environ.get("TICKER_INTRADAY_RETENTION_HOURS", "48"))
 US_EASTERN = ZoneInfo("America/New_York")
 UTC_TZ = timezone.utc
 logger = logging.getLogger(__name__)
@@ -219,6 +222,13 @@ def _safe_float(value):
         return None
 
 
+def _set_if_changed(obj, field_name, value):
+    if getattr(obj, field_name) != value:
+        setattr(obj, field_name, value)
+        return True
+    return False
+
+
 def _normalize_timestamp(value):
     if value is None:
         return None
@@ -350,6 +360,9 @@ def refresh_ticker_snapshot_from_sources(asset: Asset, quote_payload: dict | Non
     if snapshot is None:
         snapshot = TickerSnapshotLatest(asset_id=asset.id)
         db.session.add(snapshot)
+        changed = True
+    else:
+        changed = False
 
     close_series = [row.close for row in daily_bars if row.close is not None]
     latest_daily_bar = daily_bars[-1] if daily_bars else None
@@ -362,71 +375,84 @@ def refresh_ticker_snapshot_from_sources(asset: Asset, quote_payload: dict | Non
     if previous_close is None and latest_daily_bar and latest_daily_bar.close is not None:
         previous_close = latest_daily_bar.close
 
-    snapshot.last_price = current_price
-    snapshot.day_open = _safe_float(quote_payload.get("o"))
-    snapshot.day_high = _safe_float(quote_payload.get("h"))
-    snapshot.day_low = _safe_float(quote_payload.get("l"))
-    snapshot.day_close = previous_close or (latest_daily_bar.close if latest_daily_bar else None)
-    snapshot.today_change_percent = _performance_percent(current_price, previous_close)
-    snapshot.market_cap = fundamentals.market_cap if fundamentals else snapshot.market_cap
-    snapshot.pe_ratio = fundamentals.pe_ratio if fundamentals else snapshot.pe_ratio
-    snapshot.forward_pe = fundamentals.forward_pe if fundamentals else snapshot.forward_pe
-    snapshot.peg_ratio = fundamentals.peg_ratio if fundamentals else snapshot.peg_ratio
-    snapshot.price_to_sales = fundamentals.price_to_sales if fundamentals else snapshot.price_to_sales
-    snapshot.revenue_growth = fundamentals.revenue_growth if fundamentals else snapshot.revenue_growth
-    snapshot.eps_growth = fundamentals.eps_growth if fundamentals else snapshot.eps_growth
-    snapshot.revenue = fundamentals.revenue if fundamentals else snapshot.revenue
-    snapshot.gross_margin = fundamentals.gross_margin if fundamentals else snapshot.gross_margin
-    snapshot.operating_margin = fundamentals.operating_margin if fundamentals else snapshot.operating_margin
-    snapshot.free_cash_flow = fundamentals.free_cash_flow if fundamentals else snapshot.free_cash_flow
-    snapshot.debt_to_equity = fundamentals.debt_to_equity if fundamentals else snapshot.debt_to_equity
-    snapshot.return_on_equity = fundamentals.return_on_equity if fundamentals else snapshot.return_on_equity
-    snapshot.dividend_yield = fundamentals.dividend_yield if fundamentals else snapshot.dividend_yield
-    snapshot.avg_volume = _average_volume(daily_bars, 20)
-    snapshot.volume = latest_intraday_bar.volume if latest_intraday_bar and latest_intraday_bar.volume is not None else latest_daily_bar.volume if latest_daily_bar else None
-    snapshot.quote_as_of = utcnow() if quote_payload else snapshot.quote_as_of
-    snapshot.fundamentals_as_of = fundamentals.fetched_at if fundamentals else snapshot.fundamentals_as_of
+    changed |= _set_if_changed(snapshot, "last_price", current_price)
+    changed |= _set_if_changed(snapshot, "day_open", _safe_float(quote_payload.get("o")))
+    changed |= _set_if_changed(snapshot, "day_high", _safe_float(quote_payload.get("h")))
+    changed |= _set_if_changed(snapshot, "day_low", _safe_float(quote_payload.get("l")))
+    changed |= _set_if_changed(snapshot, "day_close", previous_close or (latest_daily_bar.close if latest_daily_bar else None))
+    changed |= _set_if_changed(snapshot, "today_change_percent", _performance_percent(current_price, previous_close))
+    if fundamentals:
+        changed |= _set_if_changed(snapshot, "market_cap", fundamentals.market_cap)
+        changed |= _set_if_changed(snapshot, "pe_ratio", fundamentals.pe_ratio)
+        changed |= _set_if_changed(snapshot, "forward_pe", fundamentals.forward_pe)
+        changed |= _set_if_changed(snapshot, "peg_ratio", fundamentals.peg_ratio)
+        changed |= _set_if_changed(snapshot, "price_to_sales", fundamentals.price_to_sales)
+        changed |= _set_if_changed(snapshot, "revenue_growth", fundamentals.revenue_growth)
+        changed |= _set_if_changed(snapshot, "eps_growth", fundamentals.eps_growth)
+        changed |= _set_if_changed(snapshot, "revenue", fundamentals.revenue)
+        changed |= _set_if_changed(snapshot, "gross_margin", fundamentals.gross_margin)
+        changed |= _set_if_changed(snapshot, "operating_margin", fundamentals.operating_margin)
+        changed |= _set_if_changed(snapshot, "free_cash_flow", fundamentals.free_cash_flow)
+        changed |= _set_if_changed(snapshot, "debt_to_equity", fundamentals.debt_to_equity)
+        changed |= _set_if_changed(snapshot, "return_on_equity", fundamentals.return_on_equity)
+        changed |= _set_if_changed(snapshot, "dividend_yield", fundamentals.dividend_yield)
+        changed |= _set_if_changed(snapshot, "fundamentals_as_of", fundamentals.fetched_at)
+    changed |= _set_if_changed(snapshot, "avg_volume", _average_volume(daily_bars, 20))
+    changed |= _set_if_changed(
+        snapshot,
+        "volume",
+        latest_intraday_bar.volume if latest_intraday_bar and latest_intraday_bar.volume is not None else latest_daily_bar.volume if latest_daily_bar else None,
+    )
+    if quote_payload:
+        changed |= _set_if_changed(snapshot, "quote_as_of", utcnow())
 
     if daily_bars:
         trailing_252 = daily_bars[-252:] if len(daily_bars) >= 252 else daily_bars
         high_52 = max((row.high for row in trailing_252 if row.high is not None), default=None)
         low_52 = min((row.low for row in trailing_252 if row.low is not None), default=None)
-        snapshot.fifty_two_week_high = high_52
-        snapshot.fifty_two_week_low = low_52
-        snapshot.days_since_52_week_high = _days_since_extreme(
+        sma_10 = _series_value(close_series, 10)
+        sma_20 = _series_value(close_series, 20)
+        moving_average_50 = _series_value(close_series, 50)
+        moving_average_200 = _series_value(close_series, 200)
+        price_performance_52w = _window_performance(close_series, 252)
+        percent_below_52_week_high = _percent_off(current_price, high_52)
+        if percent_below_52_week_high is not None:
+            percent_below_52_week_high *= -1
+        changed |= _set_if_changed(snapshot, "fifty_two_week_high", high_52)
+        changed |= _set_if_changed(snapshot, "fifty_two_week_low", low_52)
+        changed |= _set_if_changed(snapshot, "days_since_52_week_high", _days_since_extreme(
             [{"bar_date": row.bar_date, "high": row.high} for row in trailing_252 if row.high is not None],
             "high",
             high=True,
-        )
-        snapshot.days_since_52_week_low = _days_since_extreme(
+        ))
+        changed |= _set_if_changed(snapshot, "days_since_52_week_low", _days_since_extreme(
             [{"bar_date": row.bar_date, "low": row.low} for row in trailing_252 if row.low is not None],
             "low",
             high=False,
-        )
-        snapshot.sma_10 = _series_value(close_series, 10)
-        snapshot.sma_20 = _series_value(close_series, 20)
-        snapshot.moving_average_50 = _series_value(close_series, 50)
-        snapshot.moving_average_200 = _series_value(close_series, 200)
-        snapshot.price_performance_5d = _window_performance(close_series, 5)
-        snapshot.price_performance_4w = _window_performance(close_series, 20)
-        snapshot.price_performance_13w = _window_performance(close_series, 65)
-        snapshot.price_performance_52w = _window_performance(close_series, 252)
-        snapshot.annualized_return_1y = snapshot.price_performance_52w
-        snapshot.annualized_return_3y = _window_annualized(close_series, 252 * 3, 3)
-        snapshot.annualized_return_5y = _window_annualized(close_series, 252 * 5, 5)
-        snapshot.annualized_return_10y = _window_annualized(close_series, 252 * 10, 10)
-        snapshot.total_return = _window_performance(close_series, len(close_series))
-        snapshot.percent_below_52_week_high = _percent_off(current_price, high_52)
-        if snapshot.percent_below_52_week_high is not None:
-            snapshot.percent_below_52_week_high *= -1
-        snapshot.percent_above_52_week_low = _performance_percent(current_price, low_52)
-        snapshot.percent_price_off_10day_sma = _percent_off(current_price, snapshot.sma_10)
-        snapshot.percent_price_off_20day_sma = _percent_off(current_price, snapshot.sma_20)
-        snapshot.percent_price_off_50day_sma = _percent_off(current_price, snapshot.moving_average_50)
-        snapshot.percent_price_off_200day_sma = _percent_off(current_price, snapshot.moving_average_200)
+        ))
+        changed |= _set_if_changed(snapshot, "sma_10", sma_10)
+        changed |= _set_if_changed(snapshot, "sma_20", sma_20)
+        changed |= _set_if_changed(snapshot, "moving_average_50", moving_average_50)
+        changed |= _set_if_changed(snapshot, "moving_average_200", moving_average_200)
+        changed |= _set_if_changed(snapshot, "price_performance_5d", _window_performance(close_series, 5))
+        changed |= _set_if_changed(snapshot, "price_performance_4w", _window_performance(close_series, 20))
+        changed |= _set_if_changed(snapshot, "price_performance_13w", _window_performance(close_series, 65))
+        changed |= _set_if_changed(snapshot, "price_performance_52w", price_performance_52w)
+        changed |= _set_if_changed(snapshot, "annualized_return_1y", price_performance_52w)
+        changed |= _set_if_changed(snapshot, "annualized_return_3y", _window_annualized(close_series, 252 * 3, 3))
+        changed |= _set_if_changed(snapshot, "annualized_return_5y", _window_annualized(close_series, 252 * 5, 5))
+        changed |= _set_if_changed(snapshot, "annualized_return_10y", _window_annualized(close_series, 252 * 10, 10))
+        changed |= _set_if_changed(snapshot, "total_return", _window_performance(close_series, len(close_series)))
+        changed |= _set_if_changed(snapshot, "percent_below_52_week_high", percent_below_52_week_high)
+        changed |= _set_if_changed(snapshot, "percent_above_52_week_low", _performance_percent(current_price, low_52))
+        changed |= _set_if_changed(snapshot, "percent_price_off_10day_sma", _percent_off(current_price, sma_10))
+        changed |= _set_if_changed(snapshot, "percent_price_off_20day_sma", _percent_off(current_price, sma_20))
+        changed |= _set_if_changed(snapshot, "percent_price_off_50day_sma", _percent_off(current_price, moving_average_50))
+        changed |= _set_if_changed(snapshot, "percent_price_off_200day_sma", _percent_off(current_price, moving_average_200))
 
-    snapshot.updated_at = utcnow()
-    db.session.flush()
+    if changed:
+        snapshot.updated_at = utcnow()
+        db.session.flush()
     return snapshot
 
 
@@ -509,7 +535,7 @@ class FinnhubClient:
 
 
 class YFinanceBatchClient:
-    def __init__(self, *, period: str = "5d", interval: str = "1h", timeout_seconds: int = 20):
+    def __init__(self, *, period: str = DEFAULT_YFINANCE_PERIOD, interval: str = DEFAULT_YFINANCE_INTERVAL, timeout_seconds: int = 20):
         if yf is None:
             raise TickerIngestionError("yfinance is required for batch ticker price updates")
         self.period = period
@@ -673,6 +699,7 @@ class TickerIngestionWorker:
         self.retry_delay = retry_delay
         self.intraday_batch_size = intraday_batch_size
         self.intraday_batch_interval = intraday_batch_interval
+        self.intraday_retention = timedelta(hours=DEFAULT_INTRADAY_RETENTION_HOURS)
         self.last_intraday_batch_at = None
         self.rate_budget = RateBudget(max_calls_per_minute or int(os.environ.get("FINNHUB_RATE_LIMIT_PER_MINUTE", "45")))
         self.yfinance_budget = RateBudget(int(os.environ.get("YFINANCE_RATE_LIMIT_PER_MINUTE", "60")))
@@ -1376,7 +1403,7 @@ class TickerPriorityWorker(TickerIngestionWorker):
         if status == "no_data":
             return
 
-        cutoff = utcnow() - timedelta(days=3)
+        cutoff = utcnow() - self.intraday_retention
         TickerIntradayBar.query.filter(
             TickerIntradayBar.asset_id == asset.id,
             TickerIntradayBar.bar_timestamp < cutoff,
@@ -1393,22 +1420,39 @@ class TickerPriorityWorker(TickerIngestionWorker):
         closes = payload.get("c") or []
         volumes = payload.get("v") or []
 
+        changed = False
         for index, timestamp in enumerate(timestamps):
             bar_timestamp = datetime.utcfromtimestamp(timestamp)
             row = existing.get(bar_timestamp)
+            open_value = _safe_float(opens[index]) if index < len(opens) else None
+            high_value = _safe_float(highs[index]) if index < len(highs) else None
+            low_value = _safe_float(lows[index]) if index < len(lows) else None
+            close_value = _safe_float(closes[index]) if index < len(closes) else None
+            volume_value = _safe_float(volumes[index]) if index < len(volumes) else None
             if row is None:
                 row = TickerIntradayBar(asset_id=asset.id, bar_timestamp=bar_timestamp)
                 db.session.add(row)
-            row.open = _safe_float(opens[index]) if index < len(opens) else None
-            row.high = _safe_float(highs[index]) if index < len(highs) else None
-            row.low = _safe_float(lows[index]) if index < len(lows) else None
-            row.close = _safe_float(closes[index]) if index < len(closes) else None
-            row.volume = _safe_float(volumes[index]) if index < len(volumes) else None
-            row.source = "finnhub"
-        db.session.flush()
+                row.open = open_value
+                row.high = high_value
+                row.low = low_value
+                row.close = close_value
+                row.volume = volume_value
+                row.source = "finnhub"
+                changed = True
+                continue
+            row_changed = False
+            row_changed |= _set_if_changed(row, "open", open_value)
+            row_changed |= _set_if_changed(row, "high", high_value)
+            row_changed |= _set_if_changed(row, "low", low_value)
+            row_changed |= _set_if_changed(row, "close", close_value)
+            row_changed |= _set_if_changed(row, "volume", volume_value)
+            row_changed |= _set_if_changed(row, "source", "finnhub")
+            changed |= row_changed
+        if changed:
+            db.session.flush()
 
     def _upsert_intraday_bars_from_rows(self, asset: Asset, rows: list[dict]):
-        cutoff = utcnow() - timedelta(days=7)
+        cutoff = utcnow() - self.intraday_retention
         TickerIntradayBar.query.filter(
             TickerIntradayBar.asset_id == asset.id,
             TickerIntradayBar.bar_timestamp < cutoff,
@@ -1418,38 +1462,62 @@ class TickerPriorityWorker(TickerIngestionWorker):
             row.bar_timestamp: row
             for row in TickerIntradayBar.query.filter_by(asset_id=asset.id).all()
         }
+        changed = False
         for payload in rows:
             bar_timestamp = payload["timestamp"]
             row = existing.get(bar_timestamp)
             if row is None:
                 row = TickerIntradayBar(asset_id=asset.id, bar_timestamp=bar_timestamp)
                 db.session.add(row)
-            row.open = payload.get("open")
-            row.high = payload.get("high")
-            row.low = payload.get("low")
-            row.close = payload.get("close")
-            row.volume = payload.get("volume")
-            row.source = "yfinance"
-        db.session.flush()
+                row.open = payload.get("open")
+                row.high = payload.get("high")
+                row.low = payload.get("low")
+                row.close = payload.get("close")
+                row.volume = payload.get("volume")
+                row.source = "yfinance"
+                changed = True
+                continue
+            row_changed = False
+            row_changed |= _set_if_changed(row, "open", payload.get("open"))
+            row_changed |= _set_if_changed(row, "high", payload.get("high"))
+            row_changed |= _set_if_changed(row, "low", payload.get("low"))
+            row_changed |= _set_if_changed(row, "close", payload.get("close"))
+            row_changed |= _set_if_changed(row, "volume", payload.get("volume"))
+            row_changed |= _set_if_changed(row, "source", "yfinance")
+            changed |= row_changed
+        if changed:
+            db.session.flush()
 
     def _upsert_daily_bars_from_rows(self, asset: Asset, rows: list[dict]):
         existing = {
             row.bar_date: row
             for row in TickerDailyBar.query.filter_by(asset_id=asset.id).all()
         }
+        changed = False
         for payload in rows:
             bar_date = payload["timestamp"].date()
             row = existing.get(bar_date)
             if row is None:
                 row = TickerDailyBar(asset_id=asset.id, bar_date=bar_date)
                 db.session.add(row)
-            row.open = payload.get("open")
-            row.high = payload.get("high")
-            row.low = payload.get("low")
-            row.close = payload.get("close")
-            row.volume = payload.get("volume")
-            row.source = "yfinance"
-        db.session.flush()
+                row.open = payload.get("open")
+                row.high = payload.get("high")
+                row.low = payload.get("low")
+                row.close = payload.get("close")
+                row.volume = payload.get("volume")
+                row.source = "yfinance"
+                changed = True
+                continue
+            row_changed = False
+            row_changed |= _set_if_changed(row, "open", payload.get("open"))
+            row_changed |= _set_if_changed(row, "high", payload.get("high"))
+            row_changed |= _set_if_changed(row, "low", payload.get("low"))
+            row_changed |= _set_if_changed(row, "close", payload.get("close"))
+            row_changed |= _set_if_changed(row, "volume", payload.get("volume"))
+            row_changed |= _set_if_changed(row, "source", "yfinance")
+            changed |= row_changed
+        if changed:
+            db.session.flush()
 
     def _upsert_fundamentals_latest(self, asset: Asset, payload: dict):
         metric = payload.get("metric") or {}
@@ -1457,71 +1525,76 @@ class TickerPriorityWorker(TickerIngestionWorker):
         if fundamentals is None:
             fundamentals = TickerFundamentalsLatest(asset_id=asset.id)
             db.session.add(fundamentals)
+            changed = True
+        else:
+            changed = False
 
-        fundamentals.market_cap = _safe_float(metric.get("marketCapitalization"))
-        fundamentals.pe_ratio = _safe_float(metric.get("peNormalizedAnnual") or metric.get("peTTM"))
-        fundamentals.forward_pe = _safe_float(
+        changed |= _set_if_changed(fundamentals, "market_cap", _safe_float(metric.get("marketCapitalization")))
+        changed |= _set_if_changed(fundamentals, "pe_ratio", _safe_float(metric.get("peNormalizedAnnual") or metric.get("peTTM")))
+        changed |= _set_if_changed(fundamentals, "forward_pe", _safe_float(
             metric.get("peForwardAnnual")
             or metric.get("forwardPE")
             or metric.get("forwardPe")
-        )
-        fundamentals.peg_ratio = _safe_float(metric.get("pegRatio"))
-        fundamentals.price_to_sales = _safe_float(
+        ))
+        changed |= _set_if_changed(fundamentals, "peg_ratio", _safe_float(metric.get("pegRatio")))
+        changed |= _set_if_changed(fundamentals, "price_to_sales", _safe_float(
             metric.get("priceToSalesAnnual")
             or metric.get("psTTM")
             or metric.get("priceToSalesTTM")
-        )
-        fundamentals.revenue_growth = _safe_float(
+        ))
+        changed |= _set_if_changed(fundamentals, "revenue_growth", _safe_float(
             metric.get("revenueGrowthTTMYoy")
             or metric.get("revenueGrowthAnnual")
             or metric.get("revenueGrowth5Y")
             or metric.get("netSalesGrowthTTMYoy")
-        )
-        fundamentals.eps_growth = _safe_float(
+        ))
+        changed |= _set_if_changed(fundamentals, "eps_growth", _safe_float(
             metric.get("epsGrowthTTMYoy")
             or metric.get("epsGrowthAnnual")
             or metric.get("epsGrowth5Y")
             or metric.get("netIncomeGrowthTTMYoy")
-        )
-        fundamentals.gross_margin = _safe_float(
+        ))
+        changed |= _set_if_changed(fundamentals, "gross_margin", _safe_float(
             metric.get("grossMarginTTM")
             or metric.get("grossMarginAnnual")
             or metric.get("grossMargin5Y")
-        )
-        fundamentals.operating_margin = _safe_float(
+        ))
+        changed |= _set_if_changed(fundamentals, "operating_margin", _safe_float(
             metric.get("operatingMarginTTM")
             or metric.get("operatingMarginAnnual")
             or metric.get("operatingMargin5Y")
-        )
-        fundamentals.revenue = _safe_float(
+        ))
+        changed |= _set_if_changed(fundamentals, "revenue", _safe_float(
             metric.get("totalRevenueAnnual")
             or metric.get("revenuePerShareTTM")
             or metric.get("salesPerShareTTM")
-        )
-        fundamentals.free_cash_flow = _safe_float(
+        ))
+        changed |= _set_if_changed(fundamentals, "free_cash_flow", _safe_float(
             metric.get("currentEv/freeCashFlowTTM")
             or metric.get("freeCashFlowAnnual")
             or metric.get("fcfMarginTTM")
-        )
-        fundamentals.debt_to_equity = _safe_float(
+        ))
+        changed |= _set_if_changed(fundamentals, "debt_to_equity", _safe_float(
             metric.get("totalDebt/totalEquityAnnual")
             or metric.get("totalDebtToEquityQuarterly")
             or metric.get("totalDebtToEquityAnnual")
-        )
-        fundamentals.return_on_equity = _safe_float(
+        ))
+        changed |= _set_if_changed(fundamentals, "return_on_equity", _safe_float(
             metric.get("roeTTM")
             or metric.get("roeAnnual")
             or metric.get("roe5Y")
-        )
-        fundamentals.dividend_yield = _safe_float(
+        ))
+        changed |= _set_if_changed(fundamentals, "dividend_yield", _safe_float(
             metric.get("dividendYieldIndicatedAnnual")
             or metric.get("dividendYield5Y")
-        )
-        fundamentals.shares_outstanding = _safe_float(metric.get("shareOutstanding"))
-        fundamentals.as_of_date = utcnow().date()
-        fundamentals.fetched_at = utcnow()
-        fundamentals.raw_payload_json = json.dumps(payload, default=str)
-        db.session.flush()
+        ))
+        changed |= _set_if_changed(fundamentals, "shares_outstanding", _safe_float(metric.get("shareOutstanding")))
+        payload_json = json.dumps(payload, default=str)
+        changed |= _set_if_changed(fundamentals, "raw_payload_json", payload_json)
+        if changed:
+            fundamentals.as_of_date = utcnow().date()
+            fundamentals.fetched_at = utcnow()
+            db.session.flush()
 
     def _refresh_snapshot_from_sources(self, asset: Asset, quote_payload: dict | None = None):
         refresh_ticker_snapshot_from_sources(asset, quote_payload=quote_payload)
