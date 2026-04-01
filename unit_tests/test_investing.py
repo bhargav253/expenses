@@ -308,7 +308,8 @@ class TestInvestingWorkspace(unittest.TestCase):
         page_response = self.client.get(f'/dashboard/{self.dashboard_id}/investing')
         self.assertEqual(page_response.status_code, 200, page_response.get_data(as_text=True))
         page_text = page_response.get_data(as_text=True)
-        self.assertIn(f'data-watchlist-id="{selected_watchlist_id}"', page_text)
+        self.assertIn(f'<option value="{selected_watchlist_id}" selected>', page_text)
+        self.assertIn('loadSelectedWatchlist(selectedWatchlistId);', page_text)
 
     def test_selected_watchlist_renders_all_rows_in_scroll_table(self):
         with self.client.session_transaction() as sess:
@@ -344,10 +345,17 @@ class TestInvestingWorkspace(unittest.TestCase):
 
         page_response = self.client.get(f'/dashboard/{self.dashboard_id}/investing')
         self.assertEqual(page_response.status_code, 200, page_response.get_data(as_text=True))
-        page_text = page_response.get_data(as_text=True)
-        self.assertIn('watchlist-table-scroll', page_text)
-        self.assertIn('T050', page_text)
-        self.assertIn('T054', page_text)
+        detail_response = self.client.get(
+            f'/api/dashboard/{self.dashboard_id}/investing/watchlists/{watchlist_id}?page=1&page_size=100'
+        )
+        self.assertEqual(detail_response.status_code, 200, detail_response.get_data(as_text=True))
+        watchlist_payload = detail_response.get_json()['watchlist']
+        self.assertEqual(len(watchlist_payload['items']), 55)
+        symbols = [item['symbol'] for item in watchlist_payload['items']]
+        self.assertIn('T050', symbols)
+        self.assertIn('T054', symbols)
+        self.assertEqual(watchlist_payload['page_size'], 100)
+        self.assertEqual(watchlist_payload['sort_by'], 'market_cap')
 
     def test_selected_screener_persists_for_rendering(self):
         with self.client.session_transaction() as sess:

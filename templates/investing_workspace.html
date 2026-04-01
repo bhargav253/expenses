@@ -64,36 +64,22 @@
         max-height: 30rem;
         overflow: auto;
         position: relative;
-        --watchlist-filter-height: 3.25rem;
         background: #fff;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 0.85rem;
     }
 
-    .watchlist-table-scroll .dataTables_wrapper {
-        position: relative;
+    .watchlist-table-scroll .watchlist-table {
+        margin-bottom: 0;
     }
 
-    .watchlist-table-scroll .dataTables_filter {
+    .watchlist-table-scroll .watchlist-table thead th,
+    .watchlist-table-scroll .watchlist-table thead td {
         position: sticky;
         top: 0;
-        z-index: 4;
-        margin: 0;
-        padding: 0 0 0.75rem;
-        background: #fff;
-    }
-
-    .watchlist-table-scroll .dataTables_filter label {
-        display: inline-flex;
-        align-items: center;
-        background: #fff;
-        padding-top: 0.25rem;
-    }
-
-    .watchlist-table-scroll table.dataTable thead th,
-    .watchlist-table-scroll table.dataTable thead td {
-        position: sticky;
-        top: var(--watchlist-filter-height);
         z-index: 3;
         background: #fff;
+        box-shadow: inset 0 -1px 0 rgba(15, 23, 42, 0.08);
     }
 
     .screener-results-scroll {
@@ -509,8 +495,8 @@
         </div>
 
         <div id="watchlistsContainer" class="{% if not selected_watchlist %}d-none{% endif %}">
-            {% if selected_watchlist %}
-            {% set watchlist = selected_watchlist %}
+            {% if selected_watchlist_page %}
+            {% set watchlist = selected_watchlist_page %}
             <div class="card shadow-sm watchlist-card" data-watchlist-id="{{ watchlist['id'] }}">
                 <div class="card-header bg-white d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2">
                     <div>
@@ -518,10 +504,19 @@
                         <p class="text-muted small mb-0">{{ watchlist['description'] or 'No description yet.' }}</p>
                     </div>
                     <div class="d-flex align-items-center gap-2">
-                        <span class="badge bg-light text-dark">{{ watchlist['items']|length }} symbols</span>
+                        <span class="badge bg-light text-dark">{{ watchlist['item_count'] }} symbols</span>
                     </div>
                 </div>
                 <div class="card-body">
+                    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2 mb-3">
+                        <div class="input-group" style="max-width: 320px;">
+                            <span class="input-group-text bg-white"><i class="fas fa-search"></i></span>
+                            <input type="search" class="form-control" id="watchlistSearchInput" placeholder="Search ticker or company" value="{{ watchlist['search'] }}">
+                        </div>
+                        <div class="small text-muted">
+                            Showing {{ 1 if watchlist['items'] else 0 }}-{{ watchlist['items']|length }} of {{ watchlist['total_count'] }}
+                        </div>
+                    </div>
                     <form class="addSymbolForm row g-2 mb-4" data-watchlist-id="{{ watchlist['id'] }}">
                         <div class="col-md-9">
                             <input type="text" class="form-control symbol-input" placeholder="AAPL" maxlength="16" required>
@@ -536,16 +531,16 @@
                     <div class="watchlist-items">
                         {% if watchlist['items'] %}
                         <div class="table-responsive watchlist-table-scroll">
-                            <table class="table table-striped table-hover align-middle watchlist-table" id="watchlist-table-{{ watchlist['id'] }}">
+                            <table class="table table-striped table-hover align-middle watchlist-table mb-0" id="watchlist-table-{{ watchlist['id'] }}">
                                 <thead>
                                     <tr>
-                                        <th>Ticker</th>
-                                        <th>Name</th>
-                                        <th>Price</th>
-                                        <th>1D</th>
-                                        <th>5D</th>
+                                        <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="symbol">Ticker</button></th>
+                                        <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="asset_name">Name</button></th>
+                                        <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="price">Price</button></th>
+                                        <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="today_change_percent">1D</button></th>
+                                        <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="price_performance_5d">5D</button></th>
                                         <th>12D</th>
-                                        <th>Market Cap</th>
+                                        <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="market_cap">Market Cap</button></th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
@@ -555,39 +550,29 @@
                                     <tr>
                                         <td class="fw-semibold">{{ item.symbol }}</td>
                                         <td>{{ item.asset_name or 'Unknown asset' }}</td>
-                                        <td data-order="{{ snapshot.price if snapshot and snapshot.price is not none else -1 }}">
-                                            {{ "$%.2f"|format(snapshot.price) if snapshot and snapshot.price is not none else "N/A" }}
-                                        </td>
-                                        <td data-order="{{ snapshot.change_percent if snapshot and snapshot.change_percent is not none else -9999 }}">
+                                        <td>{{ "$%.2f"|format(snapshot.price) if snapshot and snapshot.price is not none else "N/A" }}</td>
+                                        <td>
                                             {% if snapshot and snapshot.change_percent is not none %}
-                                            <span class="{{ 'text-success' if snapshot.change_percent >= 0 else 'text-danger' }}">
-                                                {{ "%.2f%%"|format(snapshot.change_percent) }}
-                                            </span>
+                                            <span class="{{ 'text-success' if snapshot.change_percent >= 0 else 'text-danger' }}">{{ "%.2f%%"|format(snapshot.change_percent) }}</span>
                                             {% else %}
                                             N/A
                                             {% endif %}
                                         </td>
-                                        <td data-order="{{ snapshot.price_performance_5d if snapshot and snapshot.price_performance_5d is not none else -9999 }}">
+                                        <td>
                                             {% if snapshot and snapshot.price_performance_5d is not none %}
-                                            <span class="{{ 'text-success' if snapshot.price_performance_5d >= 0 else 'text-danger' }}">
-                                                {{ "%.2f%%"|format(snapshot.price_performance_5d) }}
-                                            </span>
+                                            <span class="{{ 'text-success' if snapshot.price_performance_5d >= 0 else 'text-danger' }}">{{ "%.2f%%"|format(snapshot.price_performance_5d) }}</span>
                                             {% else %}
                                             N/A
                                             {% endif %}
                                         </td>
-                                        <td data-order="{{ snapshot.price_performance_12d if snapshot and snapshot.price_performance_12d is not none else -9999 }}">
+                                        <td>
                                             {% if snapshot and snapshot.price_performance_12d is not none %}
-                                            <span class="{{ 'text-success' if snapshot.price_performance_12d >= 0 else 'text-danger' }}">
-                                                {{ "%.2f%%"|format(snapshot.price_performance_12d) }}
-                                            </span>
+                                            <span class="{{ 'text-success' if snapshot.price_performance_12d >= 0 else 'text-danger' }}">{{ "%.2f%%"|format(snapshot.price_performance_12d) }}</span>
                                             {% else %}
                                             N/A
                                             {% endif %}
                                         </td>
-                                        <td data-order="{{ snapshot.market_cap if snapshot and snapshot.market_cap is not none else -1 }}">
-                                            {{ "{:,.0f}".format(snapshot.market_cap) if snapshot and snapshot.market_cap is not none else "N/A" }}
-                                        </td>
+                                        <td>{{ "{:,.0f}".format(snapshot.market_cap) if snapshot and snapshot.market_cap is not none else "N/A" }}</td>
                                         <td>
                                             <div class="d-flex gap-2">
                                                 <button class="btn btn-sm btn-outline-secondary refresh-asset-btn" data-symbol="{{ item.symbol }}">
@@ -606,6 +591,11 @@
                         {% else %}
                         <div class="text-muted small">No symbols added yet.</div>
                         {% endif %}
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mt-3">
+                        <button type="button" class="btn btn-sm btn-outline-secondary watchlist-prev-page-btn" {% if not watchlist['has_prev'] %}disabled{% endif %}>Previous</button>
+                        <div class="small text-muted">Page {{ watchlist['page'] }}</div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary watchlist-next-page-btn" {% if not watchlist['has_next'] %}disabled{% endif %}>Next</button>
                     </div>
                 </div>
             </div>
@@ -922,12 +912,20 @@
     const investingScreenerCriteria = {{ screener_criteria|tojson }};
     const defaultScreenerWatchlistId = {{ default_screener_watchlist_id|tojson }};
     const selectedWatchlistId = {{ selected_watchlist['id'] if selected_watchlist else 'null' }};
+    const selectedWatchlistPage = {{ selected_watchlist_page|tojson }};
     const investingWatchlistChoices = [
         {% for watchlist in watchlists %}
         { id: {{ watchlist['id'] }}, name: {{ watchlist['name']|tojson }} }{% if not loop.last %},{% endif %}
         {% endfor %}
     ];
     let screenerResultsDataTable = null;
+    let watchlistQueryState = {
+        page: (selectedWatchlistPage && selectedWatchlistPage.page) || 1,
+        page_size: (selectedWatchlistPage && selectedWatchlistPage.page_size) || 10,
+        search: (selectedWatchlistPage && selectedWatchlistPage.search) || '',
+        sort_by: (selectedWatchlistPage && selectedWatchlistPage.sort_by) || 'market_cap',
+        sort_dir: (selectedWatchlistPage && selectedWatchlistPage.sort_dir) || 'desc'
+    };
 
     const InvestingApi = {
         createWatchlist(data) {
@@ -972,6 +970,16 @@
         },
         getAssetRefreshStatus(symbol) {
             return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/assets/${encodeURIComponent(symbol)}/refresh-status`);
+        },
+        getWatchlist(watchlistId) {
+            const params = new URLSearchParams({
+                page: String(watchlistQueryState.page || 1),
+                page_size: String(watchlistQueryState.page_size || 10),
+                search: watchlistQueryState.search || '',
+                sort_by: watchlistQueryState.sort_by || 'market_cap',
+                sort_dir: watchlistQueryState.sort_dir || 'desc'
+            });
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/watchlists/${watchlistId}?${params.toString()}`);
         },
         createTradeIdea(data) {
             return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-ideas`, {
@@ -1055,6 +1063,7 @@
         const saveScreenerBtn = document.getElementById('saveScreenerBtn');
         const selectedScreenerIdSelect = document.getElementById('selectedScreenerId');
         const selectedWatchlistIdSelect = document.getElementById('selectedWatchlistId');
+        const watchlistsEmptyState = document.getElementById('watchlistsEmptyState');
         const tradeAgentForm = document.getElementById('tradeAgentForm');
         const tradeAgentRunBtn = document.getElementById('tradeAgentRunBtn');
         const trendScanForm = document.getElementById('trendScanForm');
@@ -1090,16 +1099,29 @@
         const screenerCriterionSelect = document.getElementById('screenerCriterionSelect');
         const addScreenerCriterionBtn = document.getElementById('addScreenerCriterionBtn');
         const selectedCriteriaContainer = document.getElementById('selectedCriteriaContainer');
-        const addSymbolForms = document.querySelectorAll('.addSymbolForm');
-        const refreshButtons = document.querySelectorAll('.refresh-asset-btn');
-        const deleteButtons = document.querySelectorAll('.delete-watchlist-item-btn');
+        const watchlistsContainer = document.getElementById('watchlistsContainer');
         const screenerCriteriaMap = new Map(investingScreenerCriteria.map((criterion) => [criterion.id, criterion]));
         let activeScreenerCriteria = [];
         const assetRefreshPollHandles = new Map();
         const workspaceToolsStorageKey = 'investingWorkspaceToolsCollapsed';
         let latestTradeAgentRunId = null;
         let activeAgentMode = 'ticker';
+        let activeWatchlistPayload = selectedWatchlistPage || null;
+        let watchlistSearchDebounce = null;
         const editTradeIdeaModal = editTradeIdeaModalElement && window.bootstrap ? new bootstrap.Modal(editTradeIdeaModalElement) : null;
+
+        function getActiveWatchlistId() {
+            if (activeWatchlistPayload && activeWatchlistPayload.id) {
+                return String(activeWatchlistPayload.id);
+            }
+            if (selectedWatchlistIdSelect && selectedWatchlistIdSelect.value) {
+                return selectedWatchlistIdSelect.value;
+            }
+            if (selectedWatchlistId !== null && selectedWatchlistId !== undefined) {
+                return String(selectedWatchlistId);
+            }
+            return '';
+        }
 
         if (workspaceAgentRail && agentResearchSection) {
             const toggle = workspaceAgentRail.querySelector('#workspaceAgentCollapseBtn');
@@ -1803,20 +1825,296 @@
             });
         }
 
-        if (window.jQuery && $.fn.DataTable) {
-            $('.watchlist-table').each(function() {
-                $(this).DataTable({
-                    paging: false,
-                    info: false,
-                    order: [[6, 'desc']],
-                    columnDefs: [
-                        { orderable: false, targets: [7] }
-                    ],
-                    language: {
-                        searchPlaceholder: 'Ticker or company name'
+        function bindWatchlistActions() {
+            const addForm = watchlistsContainer?.querySelector('.addSymbolForm');
+            if (addForm && addForm.dataset.bound !== 'true') {
+                addForm.dataset.bound = 'true';
+                addForm.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+                    const watchlistId = addForm.getAttribute('data-watchlist-id');
+                    const symbol = addForm.querySelector('.symbol-input').value.trim();
+                    if (!symbol) {
+                        Utils.showNotification('Ticker symbol is required', 'warning');
+                        return;
+                    }
+                    try {
+                        await InvestingApi.addSymbol(watchlistId, { symbol });
+                        Utils.showNotification(`Added ${symbol.toUpperCase()} to watchlist`, 'success');
+                        await loadSelectedWatchlist(watchlistId);
+                    } catch (error) {
+                        Utils.showNotification(error.message || 'Failed to add symbol', 'danger');
+                    }
+                });
+            }
+
+            watchlistsContainer?.querySelectorAll('.refresh-asset-btn').forEach((button) => {
+                if (button.dataset.bound === 'true') {
+                    return;
+                }
+                button.dataset.bound = 'true';
+                button.addEventListener('click', async () => {
+                    const symbol = button.getAttribute('data-symbol');
+                    try {
+                        const result = await InvestingApi.refreshSymbol(symbol);
+                        Utils.showNotification(result.message || `Queued ${symbol} for refresh`, 'success');
+                        if (assetRefreshPollHandles.has(symbol)) {
+                            window.clearInterval(assetRefreshPollHandles.get(symbol));
+                        }
+                        const pollHandle = window.setInterval(async () => {
+                            try {
+                                const status = await InvestingApi.getAssetRefreshStatus(symbol);
+                                if (status.is_running) {
+                                    return;
+                                }
+                                window.clearInterval(pollHandle);
+                                assetRefreshPollHandles.delete(symbol);
+                                if (status.has_error) {
+                                    Utils.showNotification(`Refresh failed for ${symbol}: ${status.error}`, 'danger');
+                                    return;
+                                }
+                                Utils.showNotification(`Refresh complete for ${symbol}`, 'success');
+                                if (selectedWatchlistIdSelect?.value) {
+                                    await loadSelectedWatchlist(selectedWatchlistIdSelect.value, { preserveScroll: true });
+                                }
+                            } catch (error) {
+                                window.clearInterval(pollHandle);
+                                assetRefreshPollHandles.delete(symbol);
+                                Utils.showNotification(error.message || `Failed to read refresh status for ${symbol}`, 'danger');
+                            }
+                        }, 2000);
+                        assetRefreshPollHandles.set(symbol, pollHandle);
+                    } catch (error) {
+                        Utils.showNotification(error.message || 'Failed to queue asset refresh', 'danger');
                     }
                 });
             });
+
+            watchlistsContainer?.querySelectorAll('.delete-watchlist-item-btn').forEach((button) => {
+                if (button.dataset.bound === 'true') {
+                    return;
+                }
+                button.dataset.bound = 'true';
+                button.addEventListener('click', async () => {
+                    const watchlistId = button.getAttribute('data-watchlist-id');
+                    const itemId = button.getAttribute('data-item-id');
+                    try {
+                        await InvestingApi.deleteSymbol(watchlistId, itemId);
+                        Utils.showNotification('Symbol removed from watchlist', 'success');
+                        await loadSelectedWatchlist(watchlistId);
+                    } catch (error) {
+                        Utils.showNotification(error.message || 'Failed to remove symbol', 'danger');
+                    }
+                });
+            });
+
+            watchlistsContainer?.querySelectorAll('.watchlist-sort-btn').forEach((button) => {
+                if (button.dataset.bound === 'true') {
+                    return;
+                }
+                button.dataset.bound = 'true';
+                button.addEventListener('click', async () => {
+                    const sortBy = button.getAttribute('data-sort-by');
+                    if (watchlistQueryState.sort_by === sortBy) {
+                        watchlistQueryState.sort_dir = watchlistQueryState.sort_dir === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        watchlistQueryState.sort_by = sortBy;
+                        watchlistQueryState.sort_dir = (sortBy === 'symbol' || sortBy === 'asset_name') ? 'asc' : 'desc';
+                    }
+                    await loadSelectedWatchlist(getActiveWatchlistId(), { resetPage: true });
+                });
+            });
+
+            const searchInput = watchlistsContainer?.querySelector('#watchlistSearchInput');
+            if (searchInput && searchInput.dataset.bound !== 'true') {
+                searchInput.dataset.bound = 'true';
+                searchInput.addEventListener('input', () => {
+                    window.clearTimeout(watchlistSearchDebounce);
+                    watchlistSearchDebounce = window.setTimeout(async () => {
+                        watchlistQueryState.search = searchInput.value.trim();
+                        await loadSelectedWatchlist(getActiveWatchlistId(), { resetPage: true });
+                    }, 250);
+                });
+            }
+
+            const prevBtn = watchlistsContainer?.querySelector('.watchlist-prev-page-btn');
+            if (prevBtn && prevBtn.dataset.bound !== 'true') {
+                prevBtn.dataset.bound = 'true';
+                prevBtn.addEventListener('click', async () => {
+                    if (watchlistQueryState.page <= 1) {
+                        return;
+                    }
+                    watchlistQueryState.page -= 1;
+                    await loadSelectedWatchlist(getActiveWatchlistId());
+                });
+            }
+
+            const nextBtn = watchlistsContainer?.querySelector('.watchlist-next-page-btn');
+            if (nextBtn && nextBtn.dataset.bound !== 'true') {
+                nextBtn.dataset.bound = 'true';
+                nextBtn.addEventListener('click', async () => {
+                    watchlistQueryState.page += 1;
+                    await loadSelectedWatchlist(getActiveWatchlistId());
+                });
+            }
+        }
+
+        function renderSelectedWatchlist(watchlist) {
+            activeWatchlistPayload = watchlist || null;
+            if (!watchlistsContainer) {
+                return;
+            }
+            if (!watchlist) {
+                watchlistsContainer.classList.add('d-none');
+                watchlistsEmptyState?.classList.remove('d-none');
+                watchlistsContainer.innerHTML = '';
+                return;
+            }
+
+            const items = Array.isArray(watchlist.items) ? watchlist.items : [];
+            watchlistsEmptyState?.classList.add('d-none');
+            watchlistsContainer.classList.remove('d-none');
+            const sortIndicator = (field) => {
+                if (watchlist.sort_by !== field) {
+                    return '';
+                }
+                return watchlist.sort_dir === 'asc' ? ' ▲' : ' ▼';
+            };
+            const rowsHtml = items.length ? `
+                <div class="table-responsive watchlist-table-scroll">
+                    <table class="table table-striped table-hover align-middle watchlist-table mb-0" id="watchlist-table-${watchlist.id}">
+                        <thead>
+                            <tr>
+                                <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="symbol">Ticker${sortIndicator('symbol')}</button></th>
+                                <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="asset_name">Name${sortIndicator('asset_name')}</button></th>
+                                <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="price">Price${sortIndicator('price')}</button></th>
+                                <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="today_change_percent">1D${sortIndicator('today_change_percent')}</button></th>
+                                <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="price_performance_5d">5D${sortIndicator('price_performance_5d')}</button></th>
+                                <th>12D</th>
+                                <th><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-sort-btn" data-sort-by="market_cap">Market Cap${sortIndicator('market_cap')}</button></th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${items.map((item) => {
+                                const snapshot = item.snapshot || {};
+                                const changeClass = snapshot.change_percent >= 0 ? 'text-success' : 'text-danger';
+                                const perf5Class = snapshot.price_performance_5d >= 0 ? 'text-success' : 'text-danger';
+                                const perf12Class = snapshot.price_performance_12d >= 0 ? 'text-success' : 'text-danger';
+                                return `
+                                    <tr>
+                                        <td class="fw-semibold">${Utils.escapeHtml(item.symbol || '')}</td>
+                                        <td>${Utils.escapeHtml(item.asset_name || 'Unknown asset')}</td>
+                                        <td data-order="${snapshot.price ?? -1}">
+                                            ${snapshot.price !== null && snapshot.price !== undefined ? `$${formatNumber(snapshot.price, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A'}
+                                        </td>
+                                        <td data-order="${snapshot.change_percent ?? -9999}">
+                                            ${snapshot.change_percent !== null && snapshot.change_percent !== undefined ? `<span class="${changeClass}">${formatPercent(snapshot.change_percent, 2)}</span>` : 'N/A'}
+                                        </td>
+                                        <td data-order="${snapshot.price_performance_5d ?? -9999}">
+                                            ${snapshot.price_performance_5d !== null && snapshot.price_performance_5d !== undefined ? `<span class="${perf5Class}">${formatPercent(snapshot.price_performance_5d, 2)}</span>` : 'N/A'}
+                                        </td>
+                                        <td data-order="${snapshot.price_performance_12d ?? -9999}">
+                                            ${snapshot.price_performance_12d !== null && snapshot.price_performance_12d !== undefined ? `<span class="${snapshot.price_performance_12d >= 0 ? 'text-success' : 'text-danger'}">${formatPercent(snapshot.price_performance_12d, 2)}</span>` : 'N/A'}
+                                        </td>
+                                        <td data-order="${snapshot.market_cap ?? -1}">
+                                            ${snapshot.market_cap !== null && snapshot.market_cap !== undefined ? formatNumber(snapshot.market_cap, { maximumFractionDigits: 0 }) : 'N/A'}
+                                        </td>
+                                        <td>
+                                            <div class="d-flex gap-2">
+                                                <button class="btn btn-sm btn-outline-secondary refresh-asset-btn" data-symbol="${Utils.escapeHtml(item.symbol || '')}">
+                                                    <i class="fas fa-rotate"></i>
+                                                </button>
+                                                <button class="btn btn-sm btn-outline-danger delete-watchlist-item-btn" data-watchlist-id="${watchlist.id}" data-item-id="${item.id}">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            ` : '<div class="text-muted small">No symbols added yet.</div>';
+
+            watchlistsContainer.innerHTML = `
+                <div class="card shadow-sm watchlist-card" data-watchlist-id="${watchlist.id}">
+                    <div class="card-header bg-white d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2">
+                        <div>
+                            <h5 class="mb-1">${Utils.escapeHtml(watchlist.name || 'Watchlist')}</h5>
+                            <p class="text-muted small mb-0">${Utils.escapeHtml(watchlist.description || 'No description yet.')}</p>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge bg-light text-dark">${items.length} symbols</span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2 mb-3">
+                            <div class="input-group" style="max-width: 320px;">
+                                <span class="input-group-text bg-white"><i class="fas fa-search"></i></span>
+                                <input
+                                    type="search"
+                                    class="form-control"
+                                    id="watchlistSearchInput"
+                                    placeholder="Search ticker or company"
+                                    value="${Utils.escapeHtml(watchlist.search || '')}"
+                                >
+                            </div>
+                            <div class="small text-muted">
+                                Showing ${items.length ? ((watchlist.page - 1) * watchlist.page_size) + 1 : 0}-${Math.min(watchlist.page * watchlist.page_size, watchlist.total_count)} of ${watchlist.total_count}
+                            </div>
+                        </div>
+                        <form class="addSymbolForm row g-2 mb-4" data-watchlist-id="${watchlist.id}">
+                            <div class="col-md-9">
+                                <input type="text" class="form-control symbol-input" placeholder="AAPL" maxlength="16" required>
+                            </div>
+                            <div class="col-md-3 d-grid">
+                                <button type="submit" class="btn btn-outline-primary">
+                                    <i class="fas fa-plus me-1"></i>Add Symbol
+                                </button>
+                            </div>
+                        </form>
+                        <div class="watchlist-items">${rowsHtml}</div>
+                        <div class="d-flex justify-content-between align-items-center mt-3">
+                            <button type="button" class="btn btn-sm btn-outline-secondary watchlist-prev-page-btn" ${watchlist.has_prev ? '' : 'disabled'}>Previous</button>
+                            <div class="small text-muted">Page ${watchlist.page}</div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary watchlist-next-page-btn" ${watchlist.has_next ? '' : 'disabled'}>Next</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            bindWatchlistActions();
+        }
+
+        async function loadSelectedWatchlist(watchlistId, { preserveScroll = false, resetPage = false } = {}) {
+            if (!watchlistId) {
+                renderSelectedWatchlist(null);
+                return;
+            }
+            if (resetPage) {
+                watchlistQueryState.page = 1;
+            }
+            const previousScrollTop = preserveScroll ? (watchlistsContainer?.querySelector('.watchlist-table-scroll')?.scrollTop || 0) : 0;
+            watchlistsContainer.innerHTML = '<div class="card shadow-sm"><div class="card-body text-muted small">Loading watchlist...</div></div>';
+            watchlistsContainer.classList.remove('d-none');
+            watchlistsEmptyState?.classList.add('d-none');
+            try {
+                const payload = await InvestingApi.getWatchlist(watchlistId);
+                if (!payload || !payload.watchlist) {
+                    throw new Error('Watchlist response was empty');
+                }
+                renderSelectedWatchlist(payload.watchlist);
+                if (preserveScroll) {
+                    const tableShell = watchlistsContainer?.querySelector('.watchlist-table-scroll');
+                    if (tableShell) {
+                        tableShell.scrollTop = previousScrollTop;
+                    }
+                }
+            } catch (error) {
+                watchlistsContainer.innerHTML = `<div class="card shadow-sm"><div class="card-body text-danger small">Failed to load watchlist.${error && error.message ? ` ${Utils.escapeHtml(error.message)}` : ''}</div></div>`;
+                Utils.showNotification(error.message || 'Failed to load watchlist', 'danger');
+            }
         }
 
         if (selectedScreenerIdSelect) {
@@ -1914,8 +2212,15 @@
         if (selectedWatchlistIdSelect) {
             selectedWatchlistIdSelect.addEventListener('change', async () => {
                 try {
+                    watchlistQueryState = {
+                        page: 1,
+                        page_size: 10,
+                        search: '',
+                        sort_by: 'market_cap',
+                        sort_dir: 'desc'
+                    };
                     await InvestingApi.setSelectedWatchlist({ watchlist_id: selectedWatchlistIdSelect.value });
-                    window.location.reload();
+                    await loadSelectedWatchlist(selectedWatchlistIdSelect.value, { resetPage: true });
                 } catch (error) {
                     Utils.showNotification(error.message || 'Failed to update selected watchlist', 'danger');
                 }
@@ -2071,76 +2376,11 @@
         bindTradeAgentHistoryButtons();
         bindTrendScanHistoryButtons();
         bindTradeIdeaButtons();
-
-        addSymbolForms.forEach((form) => {
-            form.addEventListener('submit', async (event) => {
-                event.preventDefault();
-                const watchlistId = form.getAttribute('data-watchlist-id');
-                const symbol = form.querySelector('.symbol-input').value.trim();
-                if (!symbol) {
-                    Utils.showNotification('Ticker symbol is required', 'warning');
-                    return;
-                }
-
-                try {
-                    await InvestingApi.addSymbol(watchlistId, { symbol });
-                    Utils.showNotification(`Added ${symbol.toUpperCase()} to watchlist`, 'success');
-                    window.location.reload();
-                } catch (error) {
-                    Utils.showNotification(error.message || 'Failed to add symbol', 'danger');
-                }
-            });
-        });
-
-        refreshButtons.forEach((button) => {
-            button.addEventListener('click', async () => {
-                const symbol = button.getAttribute('data-symbol');
-                try {
-                    const result = await InvestingApi.refreshSymbol(symbol);
-                    Utils.showNotification(result.message || `Queued ${symbol} for refresh`, 'success');
-                    if (assetRefreshPollHandles.has(symbol)) {
-                        window.clearInterval(assetRefreshPollHandles.get(symbol));
-                    }
-                    const pollHandle = window.setInterval(async () => {
-                        try {
-                            const status = await InvestingApi.getAssetRefreshStatus(symbol);
-                            if (status.is_running) {
-                                return;
-                            }
-                            window.clearInterval(pollHandle);
-                            assetRefreshPollHandles.delete(symbol);
-                            if (status.has_error) {
-                                Utils.showNotification(`Refresh failed for ${symbol}: ${status.error}`, 'danger');
-                                return;
-                            }
-                            Utils.showNotification(`Refresh complete for ${symbol}`, 'success');
-                            window.setTimeout(() => window.location.reload(), 500);
-                        } catch (error) {
-                            window.clearInterval(pollHandle);
-                            assetRefreshPollHandles.delete(symbol);
-                            Utils.showNotification(error.message || `Failed to read refresh status for ${symbol}`, 'danger');
-                        }
-                    }, 2000);
-                    assetRefreshPollHandles.set(symbol, pollHandle);
-                } catch (error) {
-                    Utils.showNotification(error.message || 'Failed to queue asset refresh', 'danger');
-                }
-            });
-        });
-
-        deleteButtons.forEach((button) => {
-            button.addEventListener('click', async () => {
-                const watchlistId = button.getAttribute('data-watchlist-id');
-                const itemId = button.getAttribute('data-item-id');
-                try {
-                    await InvestingApi.deleteSymbol(watchlistId, itemId);
-                    Utils.showNotification('Symbol removed from watchlist', 'success');
-                    window.location.reload();
-                } catch (error) {
-                    Utils.showNotification(error.message || 'Failed to remove symbol', 'danger');
-                }
-            });
-        });
+        if (selectedWatchlistPage && selectedWatchlistPage.items) {
+            bindWatchlistActions();
+        } else {
+            loadSelectedWatchlist(selectedWatchlistId);
+        }
     });
 </script>
 {% endblock %}

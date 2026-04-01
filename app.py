@@ -600,6 +600,98 @@ def serialize_watchlist(watchlist):
     }
 
 
+def serialize_watchlist_page(watchlist, *, page=1, page_size=10, search='', sort_by='market_cap', sort_dir='desc'):
+    watchlist_sort_fields = {
+        'symbol': Asset.symbol,
+        'asset_name': Asset.name,
+        'price': TickerSnapshotLatest.last_price,
+        'today_change_percent': TickerSnapshotLatest.today_change_percent,
+        'price_performance_5d': TickerSnapshotLatest.price_performance_5d,
+        'market_cap': TickerSnapshotLatest.market_cap,
+    }
+    page = max(page or 1, 1)
+    page_size = max(min(page_size or 10, 100), 1)
+    search = (search or '').strip()
+    sort_by = sort_by if sort_by in watchlist_sort_fields else 'market_cap'
+    sort_dir = 'asc' if sort_dir == 'asc' else 'desc'
+
+    query = (
+        db.session.query(WatchlistItem, Asset, TickerSnapshotLatest)
+        .join(Asset, WatchlistItem.asset_id == Asset.id)
+        .outerjoin(TickerSnapshotLatest, TickerSnapshotLatest.asset_id == Asset.id)
+        .filter(WatchlistItem.watchlist_id == watchlist.id)
+    )
+
+    if search:
+        like_term = f"%{search}%"
+        query = query.filter(
+            (Asset.symbol.ilike(like_term))
+            | (Asset.name.ilike(like_term))
+        )
+
+    total_count = query.count()
+    sort_column = watchlist_sort_fields[sort_by]
+    if sort_dir == 'desc':
+        query = query.order_by(sort_column.desc().nullslast(), Asset.symbol.asc())
+    else:
+        query = query.order_by(sort_column.asc().nullsfirst(), Asset.symbol.asc())
+
+    offset = (page - 1) * page_size
+    rows = query.offset(offset).limit(page_size).all()
+
+    page_asset_ids = [asset.id for _, asset, _ in rows if asset and asset.id]
+    performance_12d_map = get_watchlist_price_performance_map(page_asset_ids, 12)
+    items = []
+    for item, asset, snapshot in rows:
+        snapshot_payload = None
+        if snapshot is not None:
+            snapshot_payload = {
+                'price': snapshot.last_price,
+                'change_percent': snapshot.today_change_percent,
+                'price_performance_5d': snapshot.price_performance_5d,
+                'price_performance_12d': performance_12d_map.get(asset.id),
+                'market_cap': snapshot.market_cap,
+                'quote_as_of': snapshot.quote_as_of.isoformat() if snapshot.quote_as_of else None,
+            }
+        items.append({
+            'id': item.id,
+            'symbol': asset.symbol if asset else None,
+            'asset_name': asset.name if asset and asset.name else (asset.symbol if asset else None),
+            'position_status': item.position_status,
+            'thesis_summary': item.thesis_summary,
+            'target_price': item.target_price,
+            'invalidation_price': item.invalidation_price,
+            'snapshot': snapshot_payload,
+        })
+
+    return {
+        'id': watchlist.id,
+        'name': watchlist.name,
+        'description': watchlist.description,
+        'is_archived': watchlist.is_archived,
+        'item_count': WatchlistItem.query.filter_by(watchlist_id=watchlist.id).count(),
+        'items': items,
+        'page': page,
+        'page_size': page_size,
+        'total_count': total_count,
+        'search': search,
+        'sort_by': sort_by,
+        'sort_dir': sort_dir,
+        'has_prev': page > 1,
+        'has_next': offset + len(items) < total_count,
+    }
+
+
+def serialize_watchlist_summary(watchlist):
+    return {
+        'id': watchlist.id,
+        'name': watchlist.name,
+        'description': watchlist.description,
+        'is_archived': watchlist.is_archived,
+        'item_count': WatchlistItem.query.filter_by(watchlist_id=watchlist.id).count(),
+    }
+
+
 def get_watchlist_cache_coverage(watchlist):
     item_asset_ids = [item.asset_id for item in watchlist.items if item.asset_id]
     total_items = len(item_asset_ids)
@@ -2393,8 +2485,12 @@ def investing_workspace(dashboard_id):
     _, selected_screener = resolve_selected_screener(dashboard_id, session['user_id'], default_screener)
     dashboard = Dashboard.query.get(dashboard_id)
     watchlists = Watchlist.query.filter_by(dashboard_id=dashboard_id).order_by(Watchlist.created_at.desc()).all()
-    serialized_watchlists = [serialize_watchlist(watchlist) for watchlist in watchlists]
-    serialized_selected_watchlist = serialize_watchlist(selected_watchlist) if selected_watchlist else None
+    serialized_watchlists = [serialize_watchlist_summary(watchlist) for watchlist in watchlists]
+    serialized_selected_watchlist = serialize_watchlist_summary(selected_watchlist) if selected_watchlist else None
+    serialized_selected_watchlist_page = (
+        serialize_watchlist_page(selected_watchlist, page=1, page_size=10, search='', sort_by='market_cap', sort_dir='desc')
+        if selected_watchlist else None
+    )
     trade_ideas = TradeIdea.query.filter_by(dashboard_id=dashboard_id).order_by(TradeIdea.created_at.desc()).all()
     serialized_trade_ideas = [serialize_trade_idea(idea) for idea in trade_ideas]
     trade_agent_runs = (
@@ -2416,6 +2512,7 @@ def investing_workspace(dashboard_id):
         dashboard=dashboard,
         watchlists=serialized_watchlists,
         selected_watchlist=serialized_selected_watchlist,
+        selected_watchlist_page=serialized_selected_watchlist_page,
         trade_ideas=serialized_trade_ideas,
         recent_trade_agent_runs=[serialize_trade_agent_run_summary(run) for run in trade_agent_runs],
         recent_trend_scan_runs=[serialize_trend_scan_run_summary_payload(run) for run in trend_scan_runs],
@@ -2437,7 +2534,38 @@ def get_watchlists(dashboard_id):
 
     ensure_default_screener_watchlist(dashboard_id, session['user_id'])
     watchlists = Watchlist.query.filter_by(dashboard_id=dashboard_id).order_by(Watchlist.created_at.desc()).all()
-    return jsonify({'watchlists': [serialize_watchlist(watchlist) for watchlist in watchlists]})
+    return jsonify({'watchlists': [serialize_watchlist_summary(watchlist) for watchlist in watchlists]})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/watchlists/<int:watchlist_id>', methods=['GET'])
+def get_watchlist_detail(dashboard_id, watchlist_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    watchlist = Watchlist.query.filter_by(id=watchlist_id, dashboard_id=dashboard_id).first()
+    if not watchlist:
+        return jsonify({'error': 'Watchlist not found'}), 404
+
+    page = request.args.get('page', default=1, type=int)
+    page_size = request.args.get('page_size', default=10, type=int)
+    search = request.args.get('search', default='', type=str)
+    sort_by = request.args.get('sort_by', default='market_cap', type=str)
+    sort_dir = request.args.get('sort_dir', default='desc', type=str)
+
+    return jsonify({
+        'watchlist': serialize_watchlist_page(
+            watchlist,
+            page=page,
+            page_size=page_size,
+            search=search,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+        )
+    })
 
 
 @app.route('/api/dashboard/<int:dashboard_id>/investing/watchlist-selection', methods=['PUT'])
