@@ -431,17 +431,18 @@ def get_or_create_dashboard_settings(user_id, dashboard_id):
 
 
 def ensure_user_dashboard_settings_schema():
-    inspector_rows = db.session.execute(text("PRAGMA table_info(user_dashboard_settings)")).fetchall()
-    if not inspector_rows:
+    inspector = inspect(db.engine)
+    if not inspector.has_table('user_dashboard_settings'):
         return
-
-    existing_columns = {row[1] for row in inspector_rows}
+    preparer = db.engine.dialect.identifier_preparer
+    table_sql = preparer.quote('user_dashboard_settings')
+    existing_columns = {column['name'] for column in inspector.get_columns('user_dashboard_settings')}
     if 'selected_investing_watchlist_id' not in existing_columns:
-        db.session.execute(text("ALTER TABLE user_dashboard_settings ADD COLUMN selected_investing_watchlist_id INTEGER"))
+        db.session.execute(text(f"ALTER TABLE {table_sql} ADD COLUMN {preparer.quote('selected_investing_watchlist_id')} INTEGER"))
         db.session.commit()
         existing_columns.add('selected_investing_watchlist_id')
     if 'selected_investing_screener_id' not in existing_columns:
-        db.session.execute(text("ALTER TABLE user_dashboard_settings ADD COLUMN selected_investing_screener_id INTEGER"))
+        db.session.execute(text(f"ALTER TABLE {table_sql} ADD COLUMN {preparer.quote('selected_investing_screener_id')} INTEGER"))
         db.session.commit()
 
 
@@ -1948,15 +1949,24 @@ from models import User, Dashboard, DashboardMember, Expense, Category, Uploaded
 
 def ensure_schema_compatibility():
     inspector = inspect(db.engine)
+    preparer = db.engine.dialect.identifier_preparer
+    is_postgres = db.engine.dialect.name.startswith('postgres')
+
+    def normalize_column_type(column_type):
+        if is_postgres and column_type == 'DATETIME':
+            return 'TIMESTAMP'
+        return column_type
 
     def ensure_columns(table_name, columns):
         if not inspector.has_table(table_name):
             return
         existing_columns = {column['name'] for column in inspector.get_columns(table_name)}
+        table_sql = preparer.quote(table_name)
         for column_name, column_type in columns:
             if column_name in existing_columns:
                 continue
-            db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+            column_sql = preparer.quote(column_name)
+            db.session.execute(text(f"ALTER TABLE {table_sql} ADD COLUMN {column_sql} {normalize_column_type(column_type)}"))
             db.session.commit()
 
     ensure_columns('asset', [
