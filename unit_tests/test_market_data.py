@@ -7,6 +7,10 @@ from unittest.mock import Mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from unit_tests.test_bootstrap import configure_test_db
+
+configure_test_db(os.path.basename(__file__))
+
 from app import app, db
 from market_data import (
     FundamentalsSnapshotData,

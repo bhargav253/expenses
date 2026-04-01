@@ -13,6 +13,10 @@ from io import BytesIO
 # Add the parent directory to the path so we can import app
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from unit_tests.test_bootstrap import configure_test_db
+
+configure_test_db(os.path.basename(__file__))
+
 from app import app, validate_file_upload, sanitize_csv_for_export, validate_expense_data, MAX_FILE_SIZE_BYTES
 
 

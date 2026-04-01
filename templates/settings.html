@@ -47,8 +47,7 @@
             </div>
             <div class="card-body">
                 <p class="text-muted mb-4">
-                    Configure your AI provider API keys to enable AI-powered expense processing and categorization.
-                    Your API keys are stored securely and only used for your account.
+                    Configure your AI provider and market-news API keys. Your keys are stored securely and only used for your account.
                 </p>
                 
                 <form id="aiSettingsForm">
@@ -141,9 +140,46 @@
                             Get your API key from <a href="https://platform.deepseek.com/" target="_blank">DeepSeek Platform</a>
                         </div>
                     </div>
+
+                    <hr class="my-4">
+
+                    <h6 class="text-primary mb-3"><i class="fas fa-newspaper me-2"></i>Market News Sources</h6>
+
+                    <div class="mb-3">
+                        <label for="newsapi_api_key" class="form-label">NewsAPI Key</label>
+                        <div class="input-group">
+                            <input type="password"
+                                   class="form-control"
+                                   id="newsapi_api_key"
+                                   name="newsapi_api_key"
+                                   value="{{ user.newsapi_api_key if user.newsapi_api_key else '' }}"
+                                   placeholder="Enter your NewsAPI key">
+                            <button class="btn btn-outline-secondary toggle-api-key" type="button" data-target="newsapi_api_key">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                        <div class="form-text">
+                            Optional. Used for on-demand trend scanning. Free tier requests are limited, so the app will respect your daily cap.
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="newsapi_daily_limit" class="form-label">NewsAPI Daily Request Limit</label>
+                        <input type="number"
+                               class="form-control"
+                               id="newsapi_daily_limit"
+                               name="newsapi_daily_limit"
+                               min="0"
+                               max="100"
+                               step="1"
+                               value="{{ user.newsapi_daily_limit if user.newsapi_daily_limit is not none else 100 }}">
+                        <div class="form-text">
+                            Set this to your personal NewsAPI daily budget. Use `0` to disable NewsAPI entirely for your account.
+                        </div>
+                    </div>
                     
                     <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-save me-1"></i>Save AI Settings
+                        <i class="fas fa-save me-1"></i>Save Settings
                     </button>
                 </form>
                 
@@ -237,7 +273,9 @@ document.addEventListener('DOMContentLoaded', function() {
             mistral_api_key: formData.get('mistral_api_key'),
             openai_api_key: formData.get('openai_api_key'),
             anthropic_api_key: formData.get('anthropic_api_key'),
-            deepseek_api_key: formData.get('deepseek_api_key')
+            deepseek_api_key: formData.get('deepseek_api_key'),
+            newsapi_api_key: formData.get('newsapi_api_key'),
+            newsapi_daily_limit: formData.get('newsapi_daily_limit')
         };
         
         try {
@@ -253,9 +291,9 @@ document.addEventListener('DOMContentLoaded', function() {
             const result = await response.json();
             
             if (response.ok) {
-                showMessage('AI settings updated successfully!', 'success');
+                showMessage('Settings updated successfully!', 'success');
             } else {
-                showMessage(result.error || 'Failed to update AI settings', 'danger');
+                showMessage(result.error || 'Failed to update settings', 'danger');
             }
         } catch (error) {
             showMessage('Network error: ' + error.message, 'danger');

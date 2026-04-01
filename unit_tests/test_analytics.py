@@ -8,6 +8,10 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from unit_tests.test_bootstrap import configure_test_db
+
+configure_test_db(os.path.basename(__file__))
+
 from app import app, db  # noqa: E402
 from models import User, Dashboard, DashboardMember, Expense  # noqa: E402
 
@@ -18,10 +22,18 @@ class TestAnalyticsEndpoint(unittest.TestCase):
         self.app = app.test_client()
 
         with app.app_context():
-            user = User.query.filter_by(email='trial@example.com').first()
-            if not user:
-                raise unittest.SkipTest("Existing user trial@example.com not found; ensure DB is seeded with this user.")
-
+            db.create_all()
+            suffix = 'analytics-test'
+            User.query.filter_by(email=f'{suffix}@example.com').delete()
+            db.session.commit()
+            user = User(
+                email=f'{suffix}@example.com',
+                name='Analytics Tester',
+                username=f'{suffix}',
+            )
+            user.set_password('password')
+            db.session.add(user)
+            db.session.commit()
             self.user_id = user.id
 
             # Create an isolated dashboard for this test under the existing user
@@ -142,6 +154,14 @@ class TestAnalyticsEndpoint(unittest.TestCase):
                 )
             ]
             db.session.add_all(expenses)
+            db.session.commit()
+
+    def tearDown(self):
+        with app.app_context():
+            DashboardMember.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete(synchronize_session=False)
+            Expense.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete(synchronize_session=False)
+            Dashboard.query.filter_by(id=getattr(self, 'dashboard_id', None)).delete(synchronize_session=False)
+            User.query.filter_by(id=getattr(self, 'user_id', None)).delete(synchronize_session=False)
             db.session.commit()
             self._created_expense_ids = [e.id for e in expenses]
             self._member_id = member.id

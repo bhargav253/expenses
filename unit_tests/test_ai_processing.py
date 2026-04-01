@@ -11,6 +11,10 @@ import requests
 import argparse
 from pathlib import Path
 
+from unit_tests.test_bootstrap import configure_test_db
+
+configure_test_db(os.path.basename(__file__))
+
 try:
     import camelot
     PDF_EXTRACTION_AVAILABLE = True

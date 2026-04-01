@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
 import socket
+import threading
 import time
 import uuid
 from collections import deque
@@ -36,12 +38,14 @@ DEFAULT_INTRADAY_REFRESH_INTERVAL = timedelta(hours=1)
 DEFAULT_FUNDAMENTALS_REFRESH_INTERVAL = timedelta(hours=24)
 DEFAULT_LEASE_SECONDS = 90
 DEFAULT_YFINANCE_BATCH_SIZE = 50
-DEFAULT_YFINANCE_BATCH_INTERVAL = timedelta(minutes=1)
+DEFAULT_YFINANCE_BATCH_INTERVAL = timedelta(seconds=30)
 US_EASTERN = ZoneInfo("America/New_York")
 UTC_TZ = timezone.utc
 logger = logging.getLogger(__name__)
 WORKER_STDOUT_ENABLED = os.environ.get("TICKER_WORKER_STDOUT", "true").lower() == "true"
 WORKER_VERBOSE_IDLE = os.environ.get("TICKER_WORKER_VERBOSE_IDLE", "false").lower() == "true"
+WORKER_VERBOSE_EVENTS = os.environ.get("TICKER_WORKER_VERBOSE_EVENTS", "false").lower() == "true"
+WORKER_HEARTBEAT_INTERVAL = timedelta(seconds=int(os.environ.get("TICKER_WORKER_HEARTBEAT_SECONDS", "60")))
 
 
 def utcnow():
@@ -181,6 +185,10 @@ def _has_fundamentals_for_trade_date(fetch_state: TickerFetchState, target_trade
     return trade_date is not None and trade_date >= target_trade_date
 
 
+def _needs_market_close_fill(fetch_state: TickerFetchState, target_trade_date: date):
+    return not _has_market_close_data(fetch_state, target_trade_date)
+
+
 def emit_worker_status(message):
     if WORKER_STDOUT_ENABLED:
         print(message, flush=True)
@@ -232,6 +240,29 @@ def _quote_payload_from_bars(rows: list[dict]):
         "o": latest.get("open"),
         "h": latest.get("high"),
         "l": latest.get("low"),
+    }
+
+
+def _quote_payload_from_daily_rows(rows: list[dict], target_trade_date: date | None = None):
+    if not rows:
+        return {}
+    filtered = rows
+    if target_trade_date is not None:
+        matching = [row for row in rows if row["timestamp"].date() == target_trade_date]
+        if matching:
+            filtered = matching
+    latest = filtered[-1]
+    previous_close = None
+    latest_index = rows.index(latest)
+    if latest_index > 0:
+        previous_close = rows[latest_index - 1].get("close")
+    return {
+        "c": latest.get("close"),
+        "o": latest.get("open"),
+        "h": latest.get("high"),
+        "l": latest.get("low"),
+        "pc": previous_close,
+        "trade_date": latest["timestamp"].date(),
     }
 
 
@@ -485,15 +516,37 @@ class YFinanceBatchClient:
         self.interval = interval
         self.timeout_seconds = timeout_seconds
 
+    @staticmethod
+    def normalize_yfinance_symbol(symbol: str) -> str:
+        normalized = normalize_symbol(symbol)
+        if not normalized:
+            return normalized
+        return normalized.replace(".", "-")
+
     def get_hourly_bars(self, symbols: list[str]):
-        normalized_symbols = [normalize_symbol(symbol) for symbol in symbols if normalize_symbol(symbol)]
-        if not normalized_symbols:
+        return self._download_rows(symbols, period=self.period, interval=self.interval)
+
+    def get_daily_bars(self, symbols: list[str], *, period: str = "10d", interval: str = "1d"):
+        return self._download_rows(symbols, period=period, interval=interval)
+
+    def _download_rows(self, symbols: list[str], *, period: str, interval: str):
+        symbol_pairs = []
+        seen_yf_symbols = set()
+        for symbol in symbols:
+            canonical_symbol = normalize_symbol(symbol)
+            yfinance_symbol = self.normalize_yfinance_symbol(symbol)
+            if not canonical_symbol or not yfinance_symbol or yfinance_symbol in seen_yf_symbols:
+                continue
+            symbol_pairs.append((canonical_symbol, yfinance_symbol))
+            seen_yf_symbols.add(yfinance_symbol)
+        if not symbol_pairs:
             return {}
+        yfinance_symbols = [pair[1] for pair in symbol_pairs]
 
         data = yf.download(
-            tickers=" ".join(normalized_symbols),
-            period=self.period,
-            interval=self.interval,
+            tickers=" ".join(yfinance_symbols),
+            period=period,
+            interval=interval,
             group_by="ticker",
             auto_adjust=False,
             threads=True,
@@ -502,15 +555,15 @@ class YFinanceBatchClient:
             timeout=self.timeout_seconds,
             multi_level_index=True,
         )
-        return self._parse_download(normalized_symbols, data)
+        return self._parse_download(symbol_pairs, data)
 
-    def _parse_download(self, symbols: list[str], dataframe):
+    def _parse_download(self, symbol_pairs: list[tuple[str, str]], dataframe):
         if dataframe is None or getattr(dataframe, "empty", True):
             return {}
 
         payload = {}
-        for symbol in symbols:
-            frame = self._extract_symbol_frame(dataframe, symbol)
+        for canonical_symbol, yfinance_symbol in symbol_pairs:
+            frame = self._extract_symbol_frame(dataframe, yfinance_symbol)
             if frame is None or getattr(frame, "empty", True):
                 continue
 
@@ -532,7 +585,7 @@ class YFinanceBatchClient:
                     }
                 )
             if bars:
-                payload[symbol] = bars
+                payload[canonical_symbol] = bars
         return payload
 
     @staticmethod
@@ -572,6 +625,27 @@ class RateBudget:
                 self._call_times.popleft()
         self._call_times.append(time.monotonic())
 
+    def snapshot(self):
+        if self.max_calls_per_minute <= 0:
+            return {
+                "used": 0,
+                "remaining": "unlimited",
+                "next_slot_seconds": 0,
+            }
+        now = time.monotonic()
+        while self._call_times and now - self._call_times[0] >= 60:
+            self._call_times.popleft()
+        used = len(self._call_times)
+        remaining = max(self.max_calls_per_minute - used, 0)
+        next_slot_seconds = 0
+        if self._call_times and used >= self.max_calls_per_minute:
+            next_slot_seconds = max(int(round(60 - (now - self._call_times[0]))), 0)
+        return {
+            "used": used,
+            "remaining": remaining,
+            "next_slot_seconds": next_slot_seconds,
+        }
+
 
 class TickerIngestionWorker:
     def __init__(
@@ -601,6 +675,73 @@ class TickerIngestionWorker:
         self.intraday_batch_interval = intraday_batch_interval
         self.last_intraday_batch_at = None
         self.rate_budget = RateBudget(max_calls_per_minute or int(os.environ.get("FINNHUB_RATE_LIMIT_PER_MINUTE", "45")))
+        self.yfinance_budget = RateBudget(int(os.environ.get("YFINANCE_RATE_LIMIT_PER_MINUTE", "60")))
+        self.heartbeat_interval = WORKER_HEARTBEAT_INTERVAL
+        self.last_heartbeat_at = None
+        self.stats = {
+            "cycles": 0,
+            "intraday_completed": 0,
+            "intraday_failed": 0,
+            "fundamentals_completed": 0,
+            "fundamentals_failed": 0,
+            "backfill_completed": 0,
+            "backfill_failed": 0,
+            "yfinance_requests": 0,
+            "yfinance_intraday_requests": 0,
+            "yfinance_close_requests": 0,
+            "finnhub_requests": 0,
+        }
+
+    def lane_label(self):
+        return self.lease_name.replace("ticker_", "").replace("_ingestion", "")
+
+    def _format_table(self, rows):
+        if not rows:
+            return ""
+        key_width = max(len(row[0]) for row in rows)
+        value_width = max(len(str(row[1])) for row in rows)
+        border = f"+-{'-' * key_width}-+-{'-' * value_width}-+"
+        lines = [border]
+        for key, value in rows:
+            lines.append(f"| {key.ljust(key_width)} | {str(value).ljust(value_width)} |")
+        lines.append(border)
+        return "\n".join(lines)
+
+    def emit_heartbeat(self, *, force: bool = False):
+        now = utcnow()
+        if not force and self.last_heartbeat_at and now - self.last_heartbeat_at < self.heartbeat_interval:
+            return
+        progress = get_worker_status_summary()
+        session_info = _market_session_info(now)
+        intraday_next_window = "n/a"
+        if self.last_intraday_batch_at is None:
+            intraday_next_window = "now"
+        else:
+            due_in = self.intraday_batch_interval - (now - self.last_intraday_batch_at)
+            intraday_next_window = "now" if due_in.total_seconds() <= 0 else f"{int(due_in.total_seconds())}s"
+        yfinance_snapshot = self.yfinance_budget.snapshot()
+        finnhub_snapshot = self.rate_budget.snapshot()
+        rows = [
+            ("lane", self.lane_label()),
+            ("market", _format_session_state(session_info)),
+            ("close-fill pending", progress["close_fill_pending"]),
+            ("market runnable", progress["runnable_intraday"]),
+            ("market done", f"{progress['assets_total'] - progress['intraday_pending']}/{progress['assets_total']}"),
+            ("market pending", progress["intraday_pending"]),
+            ("fundamentals done", f"{progress['fundamentals_ready']}/{progress['assets_total']}"),
+            ("fundamentals pending", progress["fundamentals_pending"]),
+            ("priority pending", progress["priority_pending"]),
+            ("yfinance req", self.stats["yfinance_requests"]),
+            ("yf intraday req", self.stats["yfinance_intraday_requests"]),
+            ("yf close req", self.stats["yfinance_close_requests"]),
+            ("finnhub req", self.stats["finnhub_requests"]),
+            ("yfinance window", intraday_next_window),
+            ("yf remaining/min", yfinance_snapshot["remaining"]),
+            ("fh remaining/min", finnhub_snapshot["remaining"]),
+            ("cycles", self.stats["cycles"]),
+        ]
+        emit_worker_status(f"[ticker_worker heartbeat]\n{self._format_table(rows)}")
+        self.last_heartbeat_at = now
 
     def _priority_order(self, query):
         return query.order_by(
@@ -661,8 +802,10 @@ class TickerIngestionWorker:
 
     def run_forever(self, sleep_seconds: int = 10):
         emit_worker_status(f"[ticker_worker] started owner={self.owner_id} poll={sleep_seconds}s")
+        self.emit_heartbeat(force=True)
         while True:
             processed = self.run_once()
+            self.emit_heartbeat()
             if processed == 0:
                 if WORKER_VERBOSE_IDLE:
                     emit_worker_status(f"[ticker_worker] idle sleep={sleep_seconds}s")
@@ -676,12 +819,13 @@ class TickerIngestionWorker:
         self._clear_closed_market_priority_requests(session_info)
         progress = get_worker_status_summary()
         processed = 0
+        self.stats["cycles"] += 1
         intraday_candidates = self.select_intraday_candidates(limit=self.intraday_batch_size)
         fundamentals_candidates = self.select_fundamentals_candidates()
         backfill_candidates = self.select_backfill_candidates()
         priority_intraday_candidates = [state for state in intraday_candidates if state.priority_requested_at is not None]
         has_work = bool(intraday_candidates or fundamentals_candidates or backfill_candidates or progress["priority_pending"])
-        if has_work or WORKER_VERBOSE_IDLE:
+        if (has_work or WORKER_VERBOSE_IDLE) and WORKER_VERBOSE_EVENTS:
             emit_worker_status(
                 "[ticker_worker] cycle "
                 f"{_format_session_state(session_info)} "
@@ -706,7 +850,7 @@ class TickerIngestionWorker:
             processed += self.process_backfill(fetch_state)
         self.heartbeat_lease()
         progress = get_worker_status_summary()
-        if processed or has_work or WORKER_VERBOSE_IDLE:
+        if (processed or has_work or WORKER_VERBOSE_IDLE) and WORKER_VERBOSE_EVENTS:
             emit_worker_status(
                 "[ticker_worker] cycle complete "
                 f"processed={processed} "
@@ -714,6 +858,146 @@ class TickerIngestionWorker:
                 f"priority={progress['priority_pending']} "
                 f"ready={progress['snapshots_ready']}"
             )
+        return processed
+
+    def _market_fetch_mode(self, session_info, fetch_states: list[TickerFetchState]):
+        if not fetch_states:
+            return ("idle", None)
+        if session_info["after_close"]:
+            return ("close_fill", session_info["trade_date"])
+        if session_info["before_open"]:
+            return ("close_fill", _last_completed_trading_day(session_info))
+        if session_info["during_market"]:
+            return ("intraday", session_info["trade_date"])
+        if not session_info["is_trading_day"]:
+            target_trade_date = _last_completed_trading_day(session_info)
+            close_fill_states = [
+                fetch_state
+                for fetch_state in fetch_states
+                if fetch_state.priority_requested_at is not None and _needs_market_close_fill(fetch_state, target_trade_date)
+            ]
+            if close_fill_states:
+                fetch_states[:] = close_fill_states
+                return ("close_fill", target_trade_date)
+            priority_states = [
+                fetch_state
+                for fetch_state in fetch_states
+                if fetch_state.priority_requested_at is not None
+            ]
+            if priority_states:
+                fetch_states[:] = priority_states
+                return ("intraday", target_trade_date)
+        return ("idle", None)
+
+
+class TickerMarketWorker(TickerIngestionWorker):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("lease_name", "ticker_market_ingestion")
+        super().__init__(*args, **kwargs)
+
+    def run_once(self):
+        if not self.acquire_lease():
+            return 0
+        session_info = _market_session_info()
+        self._clear_closed_market_priority_requests(session_info)
+        candidates = self.select_intraday_candidates(limit=self.intraday_batch_size)
+        priority_candidates = [state for state in candidates if state.priority_requested_at is not None]
+        processed = 0
+        self.stats["cycles"] += 1
+        if priority_candidates:
+            self.heartbeat_lease()
+            processed += self.process_intraday_batch(priority_candidates[:self.intraday_batch_size], priority=True)
+        elif candidates and self._background_intraday_batch_due():
+            self.heartbeat_lease()
+            processed += self.process_intraday_batch(candidates, priority=False)
+        self.heartbeat_lease()
+        return processed
+
+
+class TickerFundamentalsWorker(TickerIngestionWorker):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("lease_name", "ticker_fundamentals_ingestion")
+        super().__init__(*args, **kwargs)
+
+    def run_once(self):
+        if not self.acquire_lease():
+            return 0
+        processed = 0
+        self.stats["cycles"] += 1
+        for fetch_state in self.select_fundamentals_candidates():
+            self.heartbeat_lease()
+            processed += self.process_fundamentals(fetch_state)
+        self.heartbeat_lease()
+        return processed
+
+
+class TickerPriorityWorker(TickerIngestionWorker):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("lease_name", "ticker_priority_ingestion")
+        super().__init__(*args, **kwargs)
+
+    def select_priority_market_candidates(self, limit: int = DEFAULT_YFINANCE_BATCH_SIZE):
+        session_info = _market_session_info()
+        target_trade_date = _last_completed_trading_day(session_info)
+        now = utcnow()
+        query = (
+            TickerFetchState.query.join(Asset)
+            .filter((Asset.is_active.is_(True)) | (Asset.is_active.is_(None)))
+            .filter(Asset.status != "invalid")
+            .filter(TickerFetchState.priority_requested_at.isnot(None))
+            .filter((TickerFetchState.next_retry_at.is_(None)) | (TickerFetchState.next_retry_at <= now))
+        )
+        if session_info["after_close"] or session_info["before_open"]:
+            if session_info["after_close"]:
+                target_trade_date = session_info["trade_date"]
+            candidates = query.order_by(TickerFetchState.priority_requested_at.asc()).limit(limit * 3).all()
+            return [
+                fetch_state
+                for fetch_state in candidates
+                if _needs_market_close_fill(fetch_state, target_trade_date)
+            ][:limit]
+        query = query.filter(
+            (TickerFetchState.is_intraday_pending.is_(True))
+            | (TickerFetchState.intraday_fetched_at.is_(None))
+            | (TickerFetchState.intraday_fetched_at <= now - self.intraday_refresh_interval)
+        )
+        return query.order_by(TickerFetchState.priority_requested_at.asc()).limit(limit).all()
+
+    def select_priority_fundamentals_candidates(self, limit: int = 25):
+        session_info = _market_session_info()
+        target_trade_date = _last_completed_trading_day(session_info)
+        now = utcnow()
+        query = (
+            TickerFetchState.query.join(Asset)
+            .filter((Asset.is_active.is_(True)) | (Asset.is_active.is_(None)))
+            .filter(Asset.status != "invalid")
+            .filter(TickerFetchState.priority_requested_at.isnot(None))
+            .filter((TickerFetchState.next_retry_at.is_(None)) | (TickerFetchState.next_retry_at <= now))
+            .order_by(TickerFetchState.priority_requested_at.asc())
+        )
+        candidates = []
+        for fetch_state in query.limit(limit * 3).all():
+            if fetch_state.is_fundamentals_pending or not _has_fundamentals_for_trade_date(fetch_state, target_trade_date):
+                candidates.append(fetch_state)
+            if len(candidates) >= limit:
+                break
+        return candidates
+
+    def run_once(self):
+        if not self.acquire_lease():
+            return 0
+        session_info = _market_session_info()
+        self._clear_closed_market_priority_requests(session_info)
+        processed = 0
+        self.stats["cycles"] += 1
+        market_candidates = self.select_priority_market_candidates(limit=self.intraday_batch_size)
+        if market_candidates:
+            self.heartbeat_lease()
+            processed += self.process_intraday_batch(market_candidates, priority=True)
+        for fetch_state in self.select_priority_fundamentals_candidates():
+            self.heartbeat_lease()
+            processed += self.process_fundamentals(fetch_state)
+        self.heartbeat_lease()
         return processed
 
     def _clear_closed_market_priority_requests(self, session_info):
@@ -731,6 +1015,7 @@ class TickerIngestionWorker:
         message = (
             "Ticker refresh is only available on US trading days during the session or after the close update."
         )
+        cleared_count = 0
         for fetch_state in priority_states:
             needs_market_data = not _has_market_close_data(fetch_state, target_trade_date)
             needs_fundamentals = not _has_fundamentals_for_trade_date(fetch_state, target_trade_date)
@@ -741,8 +1026,10 @@ class TickerIngestionWorker:
             fetch_state.last_error_type = "MarketClosed"
             fetch_state.last_error_message = message
             fetch_state.updated_at = utcnow()
+            cleared_count += 1
         db.session.commit()
-        emit_worker_status("[ticker_worker] cleared priority refreshes because the market is closed")
+        if cleared_count:
+            emit_worker_status(f"[ticker_worker] cleared priority refreshes because the market is closed count={cleared_count}")
 
     def _background_intraday_batch_due(self):
         if self.last_intraday_batch_at is None:
@@ -751,35 +1038,36 @@ class TickerIngestionWorker:
 
     def select_intraday_candidates(self, limit: int = DEFAULT_YFINANCE_BATCH_SIZE):
         session_info = _market_session_info()
-        if session_info["before_open"]:
-            return []
-
+        target_trade_date = _last_completed_trading_day(session_info)
         now = utcnow()
         query = (
             TickerFetchState.query.join(Asset)
             .filter((Asset.is_active.is_(True)) | (Asset.is_active.is_(None)))
             .filter(Asset.status != "invalid")
             .filter((TickerFetchState.next_retry_at.is_(None)) | (TickerFetchState.next_retry_at <= now))
-            .filter(
-                (TickerFetchState.is_intraday_pending.is_(True))
-                | (TickerFetchState.intraday_fetched_at.is_(None))
-                | (TickerFetchState.intraday_fetched_at <= now - self.intraday_refresh_interval)
-            )
+        )
+        if session_info["after_close"] or session_info["before_open"]:
+            if session_info["after_close"]:
+                target_trade_date = session_info["trade_date"]
+            query = self._priority_order(query.order_by(TickerFetchState.last_market_close_trade_date.asc().nullsfirst()))
+            candidates = query.limit(limit * 3).all()
+            return [
+                fetch_state
+                for fetch_state in candidates
+                if fetch_state.priority_requested_at is not None or _needs_market_close_fill(fetch_state, target_trade_date)
+            ][:limit]
+        query = query.filter(
+            (TickerFetchState.is_intraday_pending.is_(True))
+            | (TickerFetchState.intraday_fetched_at.is_(None))
+            | (TickerFetchState.intraday_fetched_at <= now - self.intraday_refresh_interval)
         )
         query = self._priority_order(query.order_by(TickerFetchState.intraday_fetched_at.asc().nullsfirst()))
         candidates = query.limit(limit).all()
         if not session_info["is_trading_day"]:
-            target_trade_date = _last_completed_trading_day(session_info)
             return [
                 fetch_state
                 for fetch_state in candidates
                 if fetch_state.priority_requested_at is not None
-            ]
-        if session_info["after_close"]:
-            return [
-                fetch_state
-                for fetch_state in candidates
-                if fetch_state.priority_requested_at is not None or not _has_market_close_data(fetch_state, session_info["trade_date"])
             ]
         return candidates
 
@@ -823,20 +1111,12 @@ class TickerIngestionWorker:
             return 0
 
         session_info = _market_session_info()
-        target_trade_date = _last_completed_trading_day(session_info)
-        if session_info["before_open"]:
-            emit_worker_status("[ticker_worker] intraday batch skipped reason=before_open")
+        fetch_states = list(fetch_states)
+        fetch_mode, target_trade_date = self._market_fetch_mode(session_info, fetch_states)
+        if fetch_mode == "idle":
+            if WORKER_VERBOSE_IDLE:
+                emit_worker_status("[ticker_worker] market batch skipped reason=no_eligible_market_work")
             return 0
-        if not session_info["is_trading_day"]:
-            eligible_states = [
-                fetch_state
-                for fetch_state in fetch_states
-                if fetch_state.priority_requested_at is not None
-            ]
-            if not eligible_states:
-                emit_worker_status("[ticker_worker] intraday batch skipped reason=market_closed")
-                return 0
-            fetch_states = eligible_states
 
         state_ids = [fetch_state.id for fetch_state in fetch_states]
         symbols = []
@@ -845,29 +1125,53 @@ class TickerIngestionWorker:
             if fetch_state is None or fetch_state.asset is None:
                 continue
             symbols.append(fetch_state.asset.symbol)
-            logger.info("ticker_worker intraday_start symbol=%s asset_id=%s", fetch_state.asset.symbol, fetch_state.asset.id)
-            emit_worker_status(f"[ticker_worker] intraday start symbol={fetch_state.asset.symbol} asset_id={fetch_state.asset.id}")
+            if WORKER_VERBOSE_EVENTS:
+                logger.info("ticker_worker market_start mode=%s symbol=%s asset_id=%s", fetch_mode, fetch_state.asset.symbol, fetch_state.asset.id)
+                emit_worker_status(f"[ticker_worker] market start mode={fetch_mode} symbol={fetch_state.asset.symbol} asset_id={fetch_state.asset.id}")
             self._mark_attempt(fetch_state)
 
         if not symbols:
             return 0
 
         batch_label = "priority" if priority else "background"
-        emit_worker_status(
-            f"[ticker_worker] intraday batch start mode={batch_label} count={len(symbols)} symbols={','.join(symbols[:10])}"
-        )
+        if WORKER_VERBOSE_EVENTS:
+            emit_worker_status(
+                f"[ticker_worker] market batch start fetch_mode={fetch_mode} queue_mode={batch_label} count={len(symbols)} symbols={','.join(symbols[:10])}"
+            )
 
+        bars_by_symbol = {}
+        daily_bars_by_symbol = {}
         try:
-            bars_by_symbol = self.price_client.get_hourly_bars(symbols)
-            self.last_intraday_batch_at = utcnow()
+            if fetch_mode == "intraday":
+                self.yfinance_budget.consume()
+                self.stats["yfinance_requests"] += 1
+                self.stats["yfinance_intraday_requests"] += 1
+                bars_by_symbol = self.price_client.get_hourly_bars(symbols)
+                self.last_intraday_batch_at = utcnow()
+            elif fetch_mode == "close_fill":
+                self.yfinance_budget.consume()
+                self.stats["yfinance_requests"] += 1
+                self.stats["yfinance_close_requests"] += 1
+                daily_bars_by_symbol = self.price_client.get_daily_bars(symbols)
+                self.last_intraday_batch_at = utcnow()
         except Exception as exc:
             for state_id in state_ids:
                 fetch_state = TickerFetchState.query.get(state_id)
                 if fetch_state is not None:
                     self._mark_failure(fetch_state, exc)
-            logger.exception("ticker_worker intraday_batch_failed mode=%s symbols=%s", batch_label, ",".join(symbols))
-            emit_worker_status(f"[ticker_worker] intraday batch failed mode={batch_label} error={exc}")
+            logger.exception("ticker_worker market_batch_failed fetch_mode=%s queue_mode=%s symbols=%s", fetch_mode, batch_label, ",".join(symbols))
+            emit_worker_status(f"[ticker_worker] market batch failed fetch_mode={fetch_mode} queue_mode={batch_label} error={exc}")
             return 0
+
+        if fetch_mode == "intraday" and session_info["after_close"]:
+            try:
+                self.yfinance_budget.consume()
+                self.stats["yfinance_requests"] += 1
+                self.stats["yfinance_close_requests"] += 1
+                daily_bars_by_symbol = self.price_client.get_daily_bars(symbols)
+            except Exception as exc:
+                logger.exception("ticker_worker postclose_daily_batch_failed mode=%s symbols=%s", batch_label, ",".join(symbols))
+                emit_worker_status(f"[ticker_worker] post-close daily batch failed mode={batch_label} error={exc}")
 
         processed = 0
         failures = 0
@@ -878,30 +1182,63 @@ class TickerIngestionWorker:
 
             asset = fetch_state.asset
             try:
-                bars = bars_by_symbol.get(asset.symbol) or []
-                if not bars:
-                    raise TickerIngestionError(f"No yfinance hourly data returned for {asset.symbol}")
-                self._upsert_intraday_bars_from_rows(asset, bars)
-                self._refresh_snapshot_from_sources(asset, quote_payload=_quote_payload_from_bars(bars))
+                quote_payload = {}
+                close_payload = {}
+                if fetch_mode == "intraday":
+                    bars = bars_by_symbol.get(asset.symbol) or []
+                    if not bars:
+                        raise TickerIngestionError(f"No yfinance hourly data returned for {asset.symbol}")
+                    self._upsert_intraday_bars_from_rows(asset, bars)
+                    quote_payload = _quote_payload_from_bars(bars)
+                if fetch_mode == "close_fill" or session_info["after_close"]:
+                    daily_rows = daily_bars_by_symbol.get(asset.symbol) or []
+                    if daily_rows:
+                        self._upsert_daily_bars_from_rows(asset, daily_rows)
+                        close_payload = _quote_payload_from_daily_rows(daily_rows, target_trade_date)
+                        if close_payload:
+                            if fetch_mode == "close_fill":
+                                quote_payload = {
+                                    key: value
+                                    for key, value in close_payload.items()
+                                    if key in {"c", "o", "h", "l", "pc"}
+                                }
+                            else:
+                                quote_payload = {
+                                    **quote_payload,
+                                    **{key: value for key, value in close_payload.items() if key in {"c", "o", "h", "l", "pc"}},
+                                }
+                    elif fetch_mode == "close_fill":
+                        raise TickerIngestionError(f"No yfinance daily close data returned for {asset.symbol}")
+                self._refresh_snapshot_from_sources(asset, quote_payload=quote_payload)
                 fetch_state.is_intraday_pending = False
-                fetch_state.intraday_fetched_at = utcnow()
+                if fetch_mode == "intraday":
+                    fetch_state.intraday_fetched_at = utcnow()
                 fetch_state.last_market_refresh_at = utcnow()
                 fetch_state.last_intraday_bar_timestamp = self._latest_intraday_timestamp(asset)
-                if session_info["after_close"] or not session_info["is_trading_day"]:
+                if fetch_mode == "close_fill" or session_info["after_close"]:
+                    if close_payload.get("trade_date") == target_trade_date:
+                        fetch_state.last_market_close_trade_date = target_trade_date
+                elif not session_info["is_trading_day"]:
                     fetch_state.last_market_close_trade_date = target_trade_date
+                fetch_state.last_daily_bar_date = self._latest_daily_date(asset)
                 self._mark_success(fetch_state)
-                logger.info("ticker_worker intraday_success symbol=%s asset_id=%s", asset.symbol, asset.id)
-                emit_worker_status(f"[ticker_worker] intraday success symbol={asset.symbol} asset_id={asset.id}")
+                if WORKER_VERBOSE_EVENTS:
+                    logger.info("ticker_worker market_success mode=%s symbol=%s asset_id=%s", fetch_mode, asset.symbol, asset.id)
+                    emit_worker_status(f"[ticker_worker] market success mode={fetch_mode} symbol={asset.symbol} asset_id={asset.id}")
                 processed += 1
+                self.stats["intraday_completed"] += 1
             except Exception as exc:
                 self._mark_failure(fetch_state, exc)
-                logger.exception("ticker_worker intraday_failed symbol=%s asset_id=%s", asset.symbol, asset.id)
-                emit_worker_status(f"[ticker_worker] intraday failed symbol={asset.symbol} asset_id={asset.id} error={exc}")
+                if WORKER_VERBOSE_EVENTS:
+                    logger.exception("ticker_worker market_failed mode=%s symbol=%s asset_id=%s", fetch_mode, asset.symbol, asset.id)
+                    emit_worker_status(f"[ticker_worker] market failed mode={fetch_mode} symbol={asset.symbol} asset_id={asset.id} error={exc}")
                 failures += 1
+                self.stats["intraday_failed"] += 1
 
-        emit_worker_status(
-            f"[ticker_worker] intraday batch complete mode={batch_label} success={processed} failed={failures}"
-        )
+        if WORKER_VERBOSE_EVENTS:
+            emit_worker_status(
+                f"[ticker_worker] market batch complete fetch_mode={fetch_mode} queue_mode={batch_label} success={processed} failed={failures}"
+            )
         return processed
 
     def process_fundamentals(self, fetch_state: TickerFetchState):
@@ -918,11 +1255,13 @@ class TickerIngestionWorker:
             fetch_state.updated_at = utcnow()
             db.session.commit()
             return 0
-        logger.info("ticker_worker fundamentals_start symbol=%s asset_id=%s", asset.symbol, asset.id)
-        emit_worker_status(f"[ticker_worker] fundamentals start symbol={asset.symbol} asset_id={asset.id}")
+        if WORKER_VERBOSE_EVENTS:
+            logger.info("ticker_worker fundamentals_start symbol=%s asset_id=%s", asset.symbol, asset.id)
+            emit_worker_status(f"[ticker_worker] fundamentals start symbol={asset.symbol} asset_id={asset.id}")
         self._mark_attempt(fetch_state)
         try:
             self.rate_budget.consume()
+            self.stats["finnhub_requests"] += 1
             payload = self.client.get_basic_financials(asset.symbol)
             profile = self._fetch_profile(asset.symbol)
             self._apply_profile(asset, profile)
@@ -932,24 +1271,29 @@ class TickerIngestionWorker:
             fetch_state.daily_fundamentals_fetched_at = utcnow()
             fetch_state.last_fundamentals_trade_date = target_trade_date
             self._mark_success(fetch_state)
-            logger.info("ticker_worker fundamentals_success symbol=%s asset_id=%s", asset.symbol, asset.id)
-            emit_worker_status(f"[ticker_worker] fundamentals success symbol={asset.symbol} asset_id={asset.id}")
+            self.stats["fundamentals_completed"] += 1
+            if WORKER_VERBOSE_EVENTS:
+                logger.info("ticker_worker fundamentals_success symbol=%s asset_id=%s", asset.symbol, asset.id)
+                emit_worker_status(f"[ticker_worker] fundamentals success symbol={asset.symbol} asset_id={asset.id}")
             return 1
         except InvalidTickerError as exc:
             self._mark_invalid(fetch_state, asset, exc)
+            self.stats["fundamentals_failed"] += 1
             logger.warning("ticker_worker fundamentals_invalid symbol=%s asset_id=%s error=%s", asset.symbol, asset.id, exc)
             emit_worker_status(f"[ticker_worker] fundamentals invalid symbol={asset.symbol} asset_id={asset.id} error={exc}")
             return 0
         except Exception as exc:
             self._mark_failure(fetch_state, exc)
+            self.stats["fundamentals_failed"] += 1
             logger.exception("ticker_worker fundamentals_failed symbol=%s asset_id=%s", asset.symbol, asset.id)
             emit_worker_status(f"[ticker_worker] fundamentals failed symbol={asset.symbol} asset_id={asset.id} error={exc}")
             return 0
 
     def process_backfill(self, fetch_state: TickerFetchState):
         asset = fetch_state.asset
-        logger.info("ticker_worker backfill_start symbol=%s asset_id=%s", asset.symbol, asset.id)
-        emit_worker_status(f"[ticker_worker] historical backfill start symbol={asset.symbol} asset_id={asset.id}")
+        if WORKER_VERBOSE_EVENTS:
+            logger.info("ticker_worker backfill_start symbol=%s asset_id=%s", asset.symbol, asset.id)
+            emit_worker_status(f"[ticker_worker] historical backfill start symbol={asset.symbol} asset_id={asset.id}")
         self._mark_attempt(fetch_state)
         try:
             self._refresh_snapshot_from_sources(asset)
@@ -957,22 +1301,27 @@ class TickerIngestionWorker:
             fetch_state.history_backfilled_at = utcnow() if self._latest_daily_date(asset) else fetch_state.history_backfilled_at
             fetch_state.last_daily_bar_date = self._latest_daily_date(asset)
             self._mark_success(fetch_state)
-            logger.info("ticker_worker backfill_skipped symbol=%s asset_id=%s", asset.symbol, asset.id)
-            emit_worker_status(f"[ticker_worker] historical backfill skipped symbol={asset.symbol} asset_id={asset.id}; use Stooq import")
+            self.stats["backfill_completed"] += 1
+            if WORKER_VERBOSE_EVENTS:
+                logger.info("ticker_worker backfill_skipped symbol=%s asset_id=%s", asset.symbol, asset.id)
+                emit_worker_status(f"[ticker_worker] historical backfill skipped symbol={asset.symbol} asset_id={asset.id}; use Stooq import")
             return 1
         except InvalidTickerError as exc:
             self._mark_invalid(fetch_state, asset, exc)
+            self.stats["backfill_failed"] += 1
             logger.warning("ticker_worker backfill_invalid symbol=%s asset_id=%s error=%s", asset.symbol, asset.id, exc)
             emit_worker_status(f"[ticker_worker] historical backfill invalid symbol={asset.symbol} asset_id={asset.id} error={exc}")
             return 0
         except Exception as exc:
             self._mark_failure(fetch_state, exc)
+            self.stats["backfill_failed"] += 1
             logger.exception("ticker_worker backfill_failed symbol=%s asset_id=%s", asset.symbol, asset.id)
             emit_worker_status(f"[ticker_worker] historical backfill failed symbol={asset.symbol} asset_id={asset.id} error={exc}")
             return 0
 
     def _fetch_profile(self, symbol: str):
         self.rate_budget.consume()
+        self.stats["finnhub_requests"] += 1
         payload = self.client.get_company_profile(symbol)
         return payload or {}
 
@@ -1074,6 +1423,25 @@ class TickerIngestionWorker:
             row = existing.get(bar_timestamp)
             if row is None:
                 row = TickerIntradayBar(asset_id=asset.id, bar_timestamp=bar_timestamp)
+                db.session.add(row)
+            row.open = payload.get("open")
+            row.high = payload.get("high")
+            row.low = payload.get("low")
+            row.close = payload.get("close")
+            row.volume = payload.get("volume")
+            row.source = "yfinance"
+        db.session.flush()
+
+    def _upsert_daily_bars_from_rows(self, asset: Asset, rows: list[dict]):
+        existing = {
+            row.bar_date: row
+            for row in TickerDailyBar.query.filter_by(asset_id=asset.id).all()
+        }
+        for payload in rows:
+            bar_date = payload["timestamp"].date()
+            row = existing.get(bar_date)
+            if row is None:
+                row = TickerDailyBar(asset_id=asset.id, bar_date=bar_date)
                 db.session.add(row)
             row.open = payload.get("open")
             row.high = payload.get("high")
@@ -1239,6 +1607,37 @@ class TickerIngestionWorker:
         db.session.commit()
 
 
+for _method_name in [
+    "_clear_closed_market_priority_requests",
+    "_background_intraday_batch_due",
+    "select_intraday_candidates",
+    "select_fundamentals_candidates",
+    "select_backfill_candidates",
+    "process_intraday_batch",
+    "process_fundamentals",
+    "process_backfill",
+    "_fetch_profile",
+    "_apply_profile",
+    "_upsert_daily_bars",
+    "_upsert_intraday_bars",
+    "_upsert_intraday_bars_from_rows",
+    "_upsert_daily_bars_from_rows",
+    "_upsert_fundamentals_latest",
+    "_refresh_snapshot_from_sources",
+    "_quote_change_percent",
+    "_average_volume",
+    "_window_performance",
+    "_window_annualized",
+    "_latest_daily_date",
+    "_latest_intraday_timestamp",
+    "_mark_attempt",
+    "_mark_success",
+    "_mark_failure",
+    "_mark_invalid",
+]:
+    setattr(TickerIngestionWorker, _method_name, getattr(TickerPriorityWorker, _method_name))
+
+
 def seed_assets_from_symbols(symbols: list[str], *, added_source: str = "seed"):
     normalized_symbols = [normalize_symbol(symbol) for symbol in symbols if normalize_symbol(symbol)]
     created_assets = []
@@ -1267,11 +1666,16 @@ def get_worker_status_summary():
         ).count()
     )
     runnable_intraday = 0
+    close_fill_pending = 0
     for fetch_state in TickerFetchState.query.all():
+        if _needs_market_close_fill(fetch_state, target_trade_date):
+            close_fill_pending += 1
         if fetch_state.priority_requested_at is not None and not _has_market_close_data(fetch_state, target_trade_date):
             runnable_intraday += 1
             continue
         if session_info["before_open"]:
+            if _needs_market_close_fill(fetch_state, target_trade_date):
+                runnable_intraday += 1
             continue
         if not session_info["is_trading_day"]:
             continue
@@ -1303,6 +1707,7 @@ def get_worker_status_summary():
         "snapshots_ready": snapshots_ready,
         "done_assets": snapshots_ready,
         "pending_assets": pending_assets,
+        "close_fill_pending": close_fill_pending,
         "runnable_pending": runnable_intraday + runnable_fundamentals + runnable_backfill,
         "runnable_intraday": runnable_intraday,
         "runnable_fundamentals": runnable_fundamentals,
@@ -1311,6 +1716,9 @@ def get_worker_status_summary():
         "daily_bars": TickerDailyBar.query.count(),
         "intraday_bars": TickerIntradayBar.query.count(),
         "lease": _serialize_lease(WorkerLease.query.filter_by(lease_name="ticker_ingestion").first()),
+        "market_lease": _serialize_lease(WorkerLease.query.filter_by(lease_name="ticker_market_ingestion").first()),
+        "fundamentals_lease": _serialize_lease(WorkerLease.query.filter_by(lease_name="ticker_fundamentals_ingestion").first()),
+        "priority_lease": _serialize_lease(WorkerLease.query.filter_by(lease_name="ticker_priority_ingestion").first()),
     }
 
 
@@ -1323,3 +1731,72 @@ def _serialize_lease(lease):
         "leased_until": lease.leased_until.isoformat() if lease.leased_until else None,
         "heartbeat_at": lease.heartbeat_at.isoformat() if lease.heartbeat_at else None,
     }
+
+
+def _run_worker_with_app(app, worker, sleep_seconds: int):
+    with app.app_context():
+        worker.run_forever(sleep_seconds=sleep_seconds)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run ticker ingestion workers")
+    parser.add_argument(
+        "--mode",
+        choices=["all", "market", "fundamentals", "priority"],
+        default="all",
+        help="Worker mode to run",
+    )
+    parser.add_argument(
+        "--sleep-seconds",
+        type=int,
+        default=10,
+        help="Idle sleep duration between worker polls",
+    )
+    parser.add_argument(
+        "--database-url",
+        help="Override DATABASE_URL / SQLALCHEMY_DATABASE_URI for this worker process",
+    )
+    args = parser.parse_args()
+
+    if args.database_url:
+        os.environ["DATABASE_URL"] = args.database_url
+        os.environ["SQLALCHEMY_DATABASE_URI"] = args.database_url
+
+    from app import app
+
+    if args.mode == "market":
+        with app.app_context():
+            TickerMarketWorker().run_forever(sleep_seconds=args.sleep_seconds)
+        return
+    if args.mode == "fundamentals":
+        with app.app_context():
+            TickerFundamentalsWorker().run_forever(sleep_seconds=args.sleep_seconds)
+        return
+    if args.mode == "priority":
+        with app.app_context():
+            TickerPriorityWorker().run_forever(sleep_seconds=args.sleep_seconds)
+        return
+
+    workers = [
+        ("market", TickerMarketWorker()),
+        ("fundamentals", TickerFundamentalsWorker()),
+        ("priority", TickerPriorityWorker()),
+    ]
+    threads = []
+    for name, worker in workers:
+        thread = threading.Thread(
+            target=_run_worker_with_app,
+            args=(app, worker, args.sleep_seconds),
+            name=f"ticker-{name}-worker",
+            daemon=False,
+        )
+        thread.start()
+        threads.append(thread)
+        emit_worker_status(f"[ticker_worker] spawned lane={name} thread={thread.name}")
+
+    for thread in threads:
+        thread.join()
+
+
+if __name__ == "__main__":
+    main()

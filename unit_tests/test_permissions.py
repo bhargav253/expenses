@@ -12,6 +12,10 @@ from datetime import datetime
 # Add the parent directory to Python path so we can import app
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from unit_tests.test_bootstrap import configure_test_db
+
+configure_test_db(os.path.basename(__file__))
+
 from app import app, db
 from models import User, Dashboard, DashboardMember, Expense, UserDashboardSettings
 
@@ -19,8 +23,6 @@ class TestExpensePermissions(unittest.TestCase):
     
     def setUp(self):
         """Set up test database and test data"""
-        # Use an in-memory SQLite database for testing
-        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
         app.config['TESTING'] = True
         app.config['WTF_CSRF_ENABLED'] = False
         

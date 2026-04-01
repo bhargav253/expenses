@@ -8,7 +8,12 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from unit_tests.test_bootstrap import configure_test_db
+
+configure_test_db(os.path.basename(__file__))
+
 import app as app_module
+import trade_social_scan as trade_social_scan_module
 from app import (
     DEFAULT_SAVED_SCREENER_NAME,
     DEFAULT_SCREENER_WATCHLIST_NAME,
@@ -17,7 +22,7 @@ from app import (
 )
 from market_data import FundamentalsSnapshotData, MarketDataService, QuoteSnapshot, normalize_symbol
 from models import Asset, Dashboard, DashboardMember, FundamentalSnapshot, MarketSnapshot, ScreenerDefinition, TickerDailyBar, TickerFetchState, TickerFundamentalsLatest, TickerIntradayBar, TickerSnapshotLatest, TradeIdea, User, UserDashboardSettings, Watchlist, WatchlistItem, WorkerLease
-from models import TradeAgentRun, TradeAgentEvent
+from models import TradeAgentRun, TradeAgentEvent, TrendScanRun, TrendScanEvent
 
 
 class FakeProvider:
@@ -185,6 +190,8 @@ class TestInvestingWorkspace(unittest.TestCase):
             TradeIdea.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete()
             TradeAgentEvent.query.delete(synchronize_session=False)
             TradeAgentRun.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete()
+            TrendScanEvent.query.delete(synchronize_session=False)
+            TrendScanRun.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete()
             ScreenerDefinition.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete()
             UserDashboardSettings.query.filter_by(dashboard_id=getattr(self, 'dashboard_id', None)).delete()
             FundamentalSnapshot.query.delete(synchronize_session=False)
@@ -712,6 +719,156 @@ class TestInvestingWorkspace(unittest.TestCase):
         runs = list_response.get_json()['runs']
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0]['symbol'], 'AMD')
+
+    def test_delete_trade_agent_run(self):
+        with app.app_context():
+            asset = Asset(symbol='AMD', name='AMD', asset_type='equity', sector='Technology')
+            db.session.add(asset)
+            db.session.commit()
+
+            run = TradeAgentRun(
+                dashboard_id=self.dashboard_id,
+                asset_id=asset.id,
+                created_by=self.owner_id,
+                request_text='Test run',
+                analysis_json='{}',
+                critic_json='{}',
+            )
+            db.session.add(run)
+            db.session.flush()
+            db.session.add(TradeAgentEvent(
+                trade_agent_run_id=run.id,
+                event_type='test',
+                event_payload_json='{}',
+            ))
+            db.session.commit()
+            run_id = run.id
+
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = self.owner_id
+
+        response = self.client.delete(
+            f'/api/dashboard/{self.dashboard_id}/investing/trade-agent/runs/{run_id}'
+        )
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+
+        with app.app_context():
+            self.assertIsNone(TradeAgentRun.query.get(run_id))
+            self.assertEqual(TradeAgentEvent.query.filter_by(trade_agent_run_id=run_id).count(), 0)
+
+    def test_run_trend_scan_and_list_runs(self):
+        original_fetch = trade_social_scan_module.fetch_trend_source_items
+        try:
+            def fake_fetch(normalized_request, user):
+                return {
+                    'items': [
+                        {
+                            'source_name': 'gdelt',
+                            'title': 'Lumentum (LITE) draws attention after optical supplier chatter',
+                            'body_snippet': 'Traders are discussing Lumentum (LITE) as an optical beneficiary.',
+                            'url': 'https://example.com/lite',
+                            'published_at': datetime.utcnow().isoformat(),
+                            'author_or_source': 'Example Source',
+                            'engagement_hint': None,
+                        }
+                    ],
+                    'warnings': [],
+                    'sources_used': ['gdelt'],
+                    'request_events': [],
+                }
+
+            trade_social_scan_module.fetch_trend_source_items = fake_fetch
+
+            with app.app_context():
+                asset = Asset(symbol='LITE', name='Lumentum Holdings', asset_type='equity', sector='Technology')
+                db.session.add(asset)
+                db.session.commit()
+                db.session.add(TickerSnapshotLatest(
+                    asset_id=asset.id,
+                    last_price=55.0,
+                    today_change_percent=3.0,
+                    market_cap=4000000000,
+                    volume=2400000,
+                    avg_volume=1800000,
+                    moving_average_50=50.0,
+                    moving_average_200=47.0,
+                    quote_as_of=datetime.utcnow(),
+                    fundamentals_as_of=datetime.utcnow(),
+                ))
+                for offset in range(90):
+                    close = 40.0 + (offset * 0.15)
+                    db.session.add(TickerDailyBar(
+                        asset_id=asset.id,
+                        bar_date=datetime.utcnow().date() - timedelta(days=(90 - offset)),
+                        open=close - 1,
+                        high=close + 1.5,
+                        low=close - 1.25,
+                        close=close,
+                        volume=1500000 + (offset * 1000),
+                        source='fake'
+                    ))
+                db.session.commit()
+
+            with self.client.session_transaction() as sess:
+                sess['user_id'] = self.owner_id
+
+            run_response = self.client.post(
+                f'/api/dashboard/{self.dashboard_id}/investing/trend-scan/run',
+                json={'scenario_prompt': 'nvidia gtc optical asic suppliers', 'source_modes': ['gdelt'], 'max_results': 3}
+            )
+            self.assertEqual(run_response.status_code, 201, run_response.get_data(as_text=True))
+            payload = run_response.get_json()['run']
+            self.assertEqual(payload['scenario_prompt'], 'nvidia gtc optical asic suppliers')
+            self.assertEqual(payload['source_modes'], ['gdelt'])
+            self.assertGreaterEqual(len(payload['ranked_results']), 1)
+            self.assertEqual(payload['ranked_results'][0]['symbol'], 'LITE')
+
+            list_response = self.client.get(
+                f'/api/dashboard/{self.dashboard_id}/investing/trend-scan/runs'
+            )
+            self.assertEqual(list_response.status_code, 200, list_response.get_data(as_text=True))
+            runs = list_response.get_json()['runs']
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0]['top_symbols'][0], 'LITE')
+
+            with app.app_context():
+                run = TrendScanRun.query.first()
+                self.assertIsNotNone(run)
+                self.assertGreaterEqual(TrendScanEvent.query.filter_by(trend_scan_run_id=run.id).count(), 1)
+        finally:
+            trade_social_scan_module.fetch_trend_source_items = original_fetch
+
+    def test_delete_trend_scan_run(self):
+        with app.app_context():
+            run = TrendScanRun(
+                dashboard_id=self.dashboard_id,
+                created_by=self.owner_id,
+                scenario_prompt='oil shock',
+                source_modes_json='["gdelt"]',
+                ranked_results_json='[]',
+                summary_json='{}',
+            )
+            db.session.add(run)
+            db.session.flush()
+            db.session.add(TrendScanEvent(
+                trend_scan_run_id=run.id,
+                event_type='test',
+                event_payload_json='{}',
+            ))
+            db.session.commit()
+            run_id = run.id
+
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = self.owner_id
+
+        response = self.client.delete(
+            f'/api/dashboard/{self.dashboard_id}/investing/trend-scan/runs/{run_id}'
+        )
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+
+        with app.app_context():
+            self.assertIsNone(TrendScanRun.query.get(run_id))
+            self.assertEqual(TrendScanEvent.query.filter_by(trend_scan_run_id=run_id).count(), 0)
 
     def test_save_and_run_screener_against_cached_snapshots(self):
         with app.app_context():

@@ -30,6 +30,7 @@ from expense_agent import run_expense_analytics_agent
 from market_data import MarketDataError, MarketDataService, TradingViewScreenerError, TradingViewWatchlistScreenerService, normalize_symbol
 from ticker_ingestion import enqueue_asset_refresh
 from trade_agent import TradeAgentError, run_trade_agent_analysis, save_trade_agent_run_as_trade_idea, serialize_trade_agent_run
+from trade_social_scan import TrendScanError, run_trend_scan_analysis, serialize_trend_scan_run, serialize_trend_scan_run_summary
 
 # Security Configuration
 # ======================
@@ -320,6 +321,7 @@ def ensure_default_screener_watchlist(dashboard_id, created_by):
     existing_assets = Asset.query.filter(Asset.symbol.in_(symbols)).all()
     asset_map = {asset.symbol: asset for asset in existing_assets}
     missing_symbols = [symbol for symbol in symbols if symbol not in asset_map]
+    created_asset_symbols = set()
     if missing_symbols:
         db.session.add_all([
             Asset(symbol=symbol, asset_type='equity', added_source='seed', status='active')
@@ -328,11 +330,26 @@ def ensure_default_screener_watchlist(dashboard_id, created_by):
         db.session.flush()
         existing_assets = Asset.query.filter(Asset.symbol.in_(symbols)).all()
         asset_map = {asset.symbol: asset for asset in existing_assets}
+        created_asset_symbols.update(missing_symbols)
         created = True
 
-    for asset in asset_map.values():
-        enqueue_asset_refresh(asset, include_backfill=False)
-        created = True
+    # Do not re-queue the full screener universe on every workspace load.
+    # Only seed refresh state for new or uncached assets.
+    for symbol, asset in asset_map.items():
+        fetch_state = asset.ticker_fetch_state
+        needs_seed_refresh = (
+            symbol in created_asset_symbols
+            or fetch_state is None
+            or asset.ticker_snapshot_latest is None
+            or (
+                fetch_state.intraday_fetched_at is None
+                and fetch_state.daily_fundamentals_fetched_at is None
+                and fetch_state.history_backfilled_at is None
+            )
+        )
+        if needs_seed_refresh:
+            enqueue_asset_refresh(asset, include_backfill=False)
+            created = True
 
     existing_asset_ids = {
         row.asset_id
@@ -730,15 +747,7 @@ def run_background_watchlist_cache_refresh(dashboard_id, user_id, watchlist_id):
             return
 
         coverage = get_watchlist_cache_coverage(watchlist)
-        cached_asset_ids = {
-            row[0] for row in (
-                db.session.query(MarketSnapshot.asset_id)
-                .filter(MarketSnapshot.asset_id.in_([item.asset_id for item in watchlist.items if item.asset_id]))
-                .distinct()
-                .all()
-            )
-        }
-        items_to_refresh = [item for item in watchlist.items if item.asset_id and item.asset_id not in cached_asset_ids]
+        items_to_refresh = [item for item in watchlist.items if item.asset_id]
         total_to_refresh = len(items_to_refresh)
         update_watchlist_refresh_job(
             dashboard_id,
@@ -756,17 +765,14 @@ def run_background_watchlist_cache_refresh(dashboard_id, user_id, watchlist_id):
             error=None
         )
 
-        service = MarketDataService()
         refreshed_count = 0
         failed_count = 0
         processed_count = 0
         cached_count = coverage['cached_count']
         for item in items_to_refresh:
             try:
-                service.refresh_quote_snapshot(item.asset.symbol)
-                service.refresh_fundamental_snapshot(item.asset.symbol)
+                enqueue_asset_refresh(item.asset, include_backfill=False, include_fundamentals=True, include_intraday=True, priority=True)
                 refreshed_count += 1
-                cached_count += 1
             except Exception:
                 db.session.rollback()
                 failed_count += 1
@@ -908,6 +914,10 @@ def serialize_trade_agent_run_summary(run):
         'model': payload.get('model'),
         'token_usage': payload.get('token_usage'),
     }
+
+
+def serialize_trend_scan_run_summary_payload(run):
+    return serialize_trend_scan_run_summary(run)
 
 
 SCREENER_SORT_OPTIONS = {
@@ -1933,7 +1943,7 @@ google = oauth.register(
 )
 
 # Import models
-from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, TradeAgentRun, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar
+from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, TradeAgentRun, TrendScanRun, TrendScanEvent, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar
 
 
 def ensure_schema_compatibility():
@@ -2000,6 +2010,13 @@ def ensure_schema_compatibility():
         ('model_name', 'VARCHAR(100)'),
         ('stage_usage_json', 'TEXT'),
         ('token_usage_json', 'TEXT'),
+    ])
+    ensure_columns('user', [
+        ('newsapi_api_key', 'VARCHAR(255)'),
+        ('newsapi_daily_limit', 'INTEGER DEFAULT 100'),
+    ])
+    ensure_columns('trend_scan_run', [
+        ('source_statuses_json', 'TEXT'),
     ])
 
 
@@ -2215,6 +2232,16 @@ def update_ai_settings():
         user.set_encrypted_api_key('anthropic_api_key', data['anthropic_api_key'])
     if 'deepseek_api_key' in data:
         user.set_encrypted_api_key('deepseek_api_key', data['deepseek_api_key'])
+    if 'newsapi_api_key' in data:
+        user.set_encrypted_api_key('newsapi_api_key', data['newsapi_api_key'])
+    if 'newsapi_daily_limit' in data:
+        try:
+            limit_value = int(data['newsapi_daily_limit'])
+        except (TypeError, ValueError):
+            return jsonify({'error': 'NewsAPI daily limit must be a whole number'}), 400
+        if limit_value < 0 or limit_value > 100:
+            return jsonify({'error': 'NewsAPI daily limit must be between 0 and 100'}), 400
+        user.newsapi_daily_limit = limit_value
     
     db.session.commit()
     
@@ -2362,6 +2389,12 @@ def investing_workspace(dashboard_id):
         .limit(5)
         .all()
     )
+    trend_scan_runs = (
+        TrendScanRun.query.filter_by(dashboard_id=dashboard_id)
+        .order_by(TrendScanRun.created_at.desc())
+        .limit(5)
+        .all()
+    )
     screeners = ScreenerDefinition.query.filter_by(dashboard_id=dashboard_id, is_archived=False).order_by(ScreenerDefinition.updated_at.desc()).all()
     serialized_screeners = [serialize_screener_definition(screener) for screener in screeners]
     return render_template(
@@ -2371,6 +2404,7 @@ def investing_workspace(dashboard_id):
         selected_watchlist=serialized_selected_watchlist,
         trade_ideas=serialized_trade_ideas,
         recent_trade_agent_runs=[serialize_trade_agent_run_summary(run) for run in trade_agent_runs],
+        recent_trend_scan_runs=[serialize_trend_scan_run_summary_payload(run) for run in trend_scan_runs],
         screeners=serialized_screeners,
         selected_screener=serialize_screener_definition(selected_screener) if selected_screener else None,
         screener_criteria=serialize_screener_criteria(),
@@ -2796,6 +2830,99 @@ def run_trade_agent(dashboard_id):
         return jsonify({'error': f'Failed to run trade agent: {exc}'}), 500
 
 
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trend-scan/run', methods=['POST'])
+def run_trend_scan(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    data = request.get_json() or {}
+    scenario_prompt = (data.get('scenario_prompt') or '').strip()
+    source_modes = data.get('source_modes') or []
+    max_results = data.get('max_results')
+    if not scenario_prompt:
+        return jsonify({'error': 'Scenario prompt is required'}), 400
+
+    try:
+        run = run_trend_scan_analysis(
+            dashboard_id=dashboard_id,
+            scenario_prompt=scenario_prompt,
+            source_modes=source_modes,
+            max_results=max_results,
+            user_id=session['user_id'],
+        )
+        return jsonify({
+            'message': 'Trend scan completed successfully',
+            'run': serialize_trend_scan_run(run),
+        }), 201
+    except TrendScanError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("Failed to run trend scan", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+        return jsonify({'error': f'Failed to run trend scan: {exc}'}), 500
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trend-scan/runs/<int:run_id>', methods=['GET'])
+def get_trend_scan_run(dashboard_id, run_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    run = TrendScanRun.query.filter_by(id=run_id, dashboard_id=dashboard_id).first()
+    if not run:
+        return jsonify({'error': 'Trend scan run not found'}), 404
+    return jsonify({'run': serialize_trend_scan_run(run)})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trend-scan/runs', methods=['GET'])
+def list_trend_scan_runs(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    runs = (
+        TrendScanRun.query.filter_by(dashboard_id=dashboard_id)
+        .order_by(TrendScanRun.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    return jsonify({'runs': [serialize_trend_scan_run_summary_payload(run) for run in runs]})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trend-scan/runs/<int:run_id>', methods=['DELETE'])
+def delete_trend_scan_run(dashboard_id, run_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    run = TrendScanRun.query.filter_by(id=run_id, dashboard_id=dashboard_id).first()
+    if not run:
+        return jsonify({'error': 'Trend scan run not found'}), 404
+
+    try:
+        db.session.delete(run)
+        db.session.commit()
+        return jsonify({'message': 'Trend scan run deleted successfully'})
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("Failed to delete trend scan run", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+        return jsonify({'error': f'Failed to delete trend scan run: {exc}'}), 500
+
+
 @app.route('/api/dashboard/<int:dashboard_id>/investing/trade-agent/runs/<int:run_id>', methods=['GET'])
 def get_trade_agent_run(dashboard_id, run_id):
     if 'user_id' not in session:
@@ -2828,6 +2955,29 @@ def list_trade_agent_runs(dashboard_id):
         .all()
     )
     return jsonify({'runs': [serialize_trade_agent_run_summary(run) for run in runs]})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/trade-agent/runs/<int:run_id>', methods=['DELETE'])
+def delete_trade_agent_run(dashboard_id, run_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    run = TradeAgentRun.query.filter_by(id=run_id, dashboard_id=dashboard_id).first()
+    if not run:
+        return jsonify({'error': 'Trade-agent run not found'}), 404
+
+    try:
+        db.session.delete(run)
+        db.session.commit()
+        return jsonify({'message': 'Trade-agent run deleted successfully'})
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("Failed to delete trade-agent run", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id']})
+        return jsonify({'error': f'Failed to delete trade-agent run: {exc}'}), 500
 
 
 @app.route('/api/dashboard/<int:dashboard_id>/investing/trade-agent/runs/<int:run_id>/save-idea', methods=['POST'])

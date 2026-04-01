@@ -28,7 +28,9 @@ class User(db.Model):
     openai_api_key = db.Column(db.String(255))
     anthropic_api_key = db.Column(db.String(255))
     deepseek_api_key = db.Column(db.String(255))
+    newsapi_api_key = db.Column(db.String(255))
     default_ai_provider = db.Column(db.String(50), default='mistral')  # 'mistral', 'openai', 'anthropic', 'deepseek'
+    newsapi_daily_limit = db.Column(db.Integer, default=100)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -238,6 +240,40 @@ class TradeAgentEvent(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     run = db.relationship('TradeAgentRun', back_populates='events')
+
+
+class TrendScanRun(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False, index=True)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    scenario_prompt = db.Column(db.Text, nullable=False)
+    source_modes_json = db.Column(db.Text)
+    query_terms_json = db.Column(db.Text)
+    ranked_results_json = db.Column(db.Text)
+    warnings_json = db.Column(db.Text)
+    summary_json = db.Column(db.Text)
+    source_statuses_json = db.Column(db.Text)
+    status = db.Column(db.String(50), default='completed')
+    generation_mode = db.Column(db.String(50), default='deterministic')
+    provider_name = db.Column(db.String(50))
+    model_name = db.Column(db.String(100))
+    token_usage_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dashboard = db.relationship('Dashboard')
+    creator = db.relationship('User')
+    events = db.relationship('TrendScanEvent', back_populates='run', cascade='all, delete-orphan')
+
+
+class TrendScanEvent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    trend_scan_run_id = db.Column(db.Integer, db.ForeignKey('trend_scan_run.id'), nullable=False, index=True)
+    event_type = db.Column(db.String(100), nullable=False)
+    event_payload_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    run = db.relationship('TrendScanRun', back_populates='events')
 
 
 class MarketSnapshot(db.Model):

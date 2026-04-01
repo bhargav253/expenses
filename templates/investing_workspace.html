@@ -380,7 +380,9 @@
         </div>
     </div>
 
-    <div class="col-xl-6" id="workspaceMainColumn">
+    <div class="col-xl-9" id="workspaceMainColumn">
+        <div id="agentResearchSection"></div>
+        <div id="screenersSection">
         <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center mb-3 gap-2">
             <div class="d-flex align-items-center gap-2">
                 <h5 class="mb-0"><i class="fas fa-filter me-2 text-primary"></i>Screeners</h5>
@@ -476,7 +478,9 @@
                 </div>
             </div>
         </div>
+        </div>
 
+        <div id="watchlistSection">
         <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center mb-3 gap-2">
             <div class="d-flex align-items-center gap-2">
                 <h5 class="mb-0"><i class="fas fa-list me-2 text-primary"></i>Watchlist</h5>
@@ -607,7 +611,9 @@
             </div>
             {% endif %}
         </div>
+        </div>
 
+        <div id="tradeIdeasSection">
         <div class="d-flex justify-content-between align-items-center mt-5 mb-3">
             <h5 class="mb-0"><i class="fas fa-bullseye me-2 text-primary"></i>Trade Ideas</h5>
             <span class="badge bg-light text-dark">{{ trade_ideas|length }} ideas</span>
@@ -625,6 +631,16 @@
             </div>
             <div class="card-body">
                 <div id="tradeAgentResultBody"></div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm mb-4 d-none" id="trendScanResultCard">
+            <div class="card-header bg-white">
+                <div class="fw-semibold"><i class="fas fa-wave-square me-2 text-primary"></i>Trend Scan Result</div>
+                <div class="small text-muted" id="trendScanResultMeta">Waiting for trend scan.</div>
+            </div>
+            <div class="card-body">
+                <div id="trendScanResultBody"></div>
             </div>
         </div>
 
@@ -669,6 +685,7 @@
                 {% endif %}
             </div>
         </div>
+        </div>
     </div>
 
     <div class="col-xl-3 workspace-rail-column" id="workspaceAgentColumn">
@@ -688,6 +705,13 @@
                         <h6 class="mb-0"><i class="fas fa-satellite-dish me-2 text-primary"></i>Trade Agent</h6>
                     </div>
                     <div class="card-body">
+                        <div class="btn-group w-100 mb-3" role="group" aria-label="Trade agent mode">
+                            <input type="radio" class="btn-check" name="tradeAgentMode" id="tradeAgentModeTicker" value="ticker" autocomplete="off" checked>
+                            <label class="btn btn-outline-primary" for="tradeAgentModeTicker">Single Ticker</label>
+                            <input type="radio" class="btn-check" name="tradeAgentMode" id="tradeAgentModeTrend" value="trend" autocomplete="off">
+                            <label class="btn btn-outline-primary" for="tradeAgentModeTrend">Trend Scan</label>
+                        </div>
+
                         <form id="tradeAgentForm" class="d-grid gap-3">
                             <div>
                                 <label for="tradeAgentSymbol" class="form-label">Ticker</label>
@@ -701,22 +725,46 @@
                                 <i class="fas fa-satellite-dish me-1"></i>Run Trade Agent
                             </button>
                         </form>
+
+                        <form id="trendScanForm" class="d-grid gap-3 d-none">
+                            <div>
+                                <label for="trendScanPrompt" class="form-label">Trend Scenario</label>
+                                <textarea class="form-control" id="trendScanPrompt" rows="5" placeholder="Iran war swing trades. Find names getting attention and worth deeper review."></textarea>
+                            </div>
+                            <div>
+                                <label class="form-label d-block">Sources</label>
+                                <div class="d-flex flex-wrap gap-3 small">
+                                    <label class="form-check-label"><input class="form-check-input me-1 trend-source-checkbox" type="checkbox" value="gdelt" checked>GDELT</label>
+                                    <label class="form-check-label"><input class="form-check-input me-1 trend-source-checkbox" type="checkbox" value="newsapi" checked>NewsAPI</label>
+                                    <label class="form-check-label"><input class="form-check-input me-1 trend-source-checkbox" type="checkbox" value="reddit">Reddit</label>
+                                    <label class="form-check-label"><input class="form-check-input me-1 trend-source-checkbox" type="checkbox" value="stocktwits">Stocktwits</label>
+                                </div>
+                            </div>
+                            <div>
+                                <label for="trendScanMaxResults" class="form-label">Top Results</label>
+                                <input type="number" class="form-control" id="trendScanMaxResults" min="1" max="8" value="5">
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100" id="trendScanRunBtn">
+                                <i class="fas fa-wave-square me-1"></i>Run Trend Scan
+                            </button>
+                        </form>
                         <div class="small text-muted mt-3">
-                            Uses cached market data, local daily bars, and a bounded synthesis/critic workflow. This is research support, not automated trading.
+                            Single ticker uses cached market data and bounded synthesis. Trend scan discovers candidates from on-demand external sources, then hands top names into the same ticker workflow.
                         </div>
                     </div>
                 </div>
 
                 <div class="card shadow-sm">
                     <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                        <div class="fw-semibold"><i class="fas fa-clock-rotate-left me-2 text-primary"></i>Recent Trade-Agent Runs</div>
-                        <span class="badge bg-light text-dark">{{ recent_trade_agent_runs|length }} recent</span>
+                        <div class="fw-semibold"><i class="fas fa-clock-rotate-left me-2 text-primary"></i>Recent Agent Runs</div>
+                        <span class="badge bg-light text-dark">{{ recent_trade_agent_runs|length + recent_trend_scan_runs|length }} recent</span>
                     </div>
                     <div class="card-body">
+                        <div class="small fw-semibold text-uppercase text-muted mb-2">Single Ticker</div>
                         {% if recent_trade_agent_runs %}
                         <div class="list-group list-group-flush" id="tradeAgentRunHistoryList">
                             {% for run in recent_trade_agent_runs %}
-                            <div class="list-group-item px-0">
+                            <div class="list-group-item px-0" data-trade-agent-run-id="{{ run.id }}">
                                 <div class="d-flex justify-content-between align-items-start gap-3">
                                     <div>
                                         <div class="fw-semibold">{{ run.symbol }}{% if run.title %} · {{ run.title }}{% endif %}</div>
@@ -726,6 +774,9 @@
                                     <div class="d-flex gap-2">
                                         <button type="button" class="btn btn-sm btn-outline-secondary view-trade-agent-run-btn" data-run-id="{{ run.id }}">
                                             View
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-danger delete-trade-agent-run-btn" data-run-id="{{ run.id }}">
+                                            Delete
                                         </button>
                                         {% if run.created_trade_idea_id %}
                                         <span class="badge bg-success-subtle text-success border align-self-center">Saved</span>
@@ -738,6 +789,35 @@
                         {% else %}
                         <div class="text-muted small" id="tradeAgentRunHistoryEmpty">No trade-agent runs yet.</div>
                         <div class="list-group list-group-flush d-none" id="tradeAgentRunHistoryList"></div>
+                        {% endif %}
+
+                        <hr class="my-4">
+                        <div class="small fw-semibold text-uppercase text-muted mb-2">Trend Scan</div>
+                        {% if recent_trend_scan_runs %}
+                        <div class="list-group list-group-flush" id="trendScanRunHistoryList">
+                            {% for run in recent_trend_scan_runs %}
+                            <div class="list-group-item px-0" data-trend-scan-run-id="{{ run.id }}">
+                                <div class="d-flex justify-content-between align-items-start gap-3">
+                                    <div>
+                                        <div class="fw-semibold">{{ run.scenario_prompt }}</div>
+                                        <div class="small text-muted text-uppercase">{{ run.top_symbols|join(', ') if run.top_symbols else 'no symbols' }}</div>
+                                        <div class="small text-muted">{{ run.created_at }}</div>
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary view-trend-scan-run-btn" data-run-id="{{ run.id }}">
+                                            View
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-danger delete-trend-scan-run-btn" data-run-id="{{ run.id }}">
+                                            Delete
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <div class="text-muted small" id="trendScanRunHistoryEmpty">No trend scans yet.</div>
+                        <div class="list-group list-group-flush d-none" id="trendScanRunHistoryList"></div>
                         {% endif %}
                     </div>
                 </div>
@@ -837,6 +917,7 @@
     const investingDashboardId = {{ dashboard.id }};
     const investingSavedScreeners = {{ screeners|tojson }};
     const recentTradeAgentRuns = {{ recent_trade_agent_runs|tojson }};
+    const recentTrendScanRuns = {{ recent_trend_scan_runs|tojson }};
     const selectedInvestingScreener = {{ selected_screener|tojson }};
     const investingScreenerCriteria = {{ screener_criteria|tojson }};
     const defaultScreenerWatchlistId = {{ default_screener_watchlist_id|tojson }};
@@ -904,6 +985,12 @@
                 body: data
             });
         },
+        runTrendScan(data) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trend-scan/run`, {
+                method: 'POST',
+                body: data
+            });
+        },
         saveTradeAgentIdea(runId) {
             return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-agent/runs/${runId}/save-idea`, {
                 method: 'POST'
@@ -911,6 +998,19 @@
         },
         getTradeAgentRun(runId) {
             return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-agent/runs/${runId}`);
+        },
+        getTrendScanRun(runId) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trend-scan/runs/${runId}`);
+        },
+        deleteTradeAgentRun(runId) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-agent/runs/${runId}`, {
+                method: 'DELETE'
+            });
+        },
+        deleteTrendScanRun(runId) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trend-scan/runs/${runId}`, {
+                method: 'DELETE'
+            });
         },
         updateTradeIdea(ideaId, data) {
             return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-ideas/${ideaId}`, {
@@ -944,8 +1044,11 @@
         const workspaceMainColumn = document.getElementById('workspaceMainColumn');
         const workspaceAgentColumn = document.getElementById('workspaceAgentColumn');
         const workspaceAgentRail = document.getElementById('workspaceAgentRail');
+        const agentResearchSection = document.getElementById('agentResearchSection');
+        const watchlistSection = document.getElementById('watchlistSection');
+        const screenersSection = document.getElementById('screenersSection');
+        const tradeIdeasSection = document.getElementById('tradeIdeasSection');
         const workspaceToolsCollapseBtn = document.getElementById('workspaceToolsCollapseBtn');
-        const workspaceAgentCollapseBtn = document.getElementById('workspaceAgentCollapseBtn');
         const createForm = document.getElementById('createWatchlistForm');
         const createTradeIdeaForm = document.getElementById('createTradeIdeaForm');
         const screenerForm = document.getElementById('screenerForm');
@@ -954,12 +1057,19 @@
         const selectedWatchlistIdSelect = document.getElementById('selectedWatchlistId');
         const tradeAgentForm = document.getElementById('tradeAgentForm');
         const tradeAgentRunBtn = document.getElementById('tradeAgentRunBtn');
+        const trendScanForm = document.getElementById('trendScanForm');
+        const trendScanRunBtn = document.getElementById('trendScanRunBtn');
         const tradeAgentResultCard = document.getElementById('tradeAgentResultCard');
         const tradeAgentResultBody = document.getElementById('tradeAgentResultBody');
         const tradeAgentResultMeta = document.getElementById('tradeAgentResultMeta');
+        const trendScanResultCard = document.getElementById('trendScanResultCard');
+        const trendScanResultBody = document.getElementById('trendScanResultBody');
+        const trendScanResultMeta = document.getElementById('trendScanResultMeta');
         const saveTradeAgentIdeaBtn = document.getElementById('saveTradeAgentIdeaBtn');
         const tradeAgentRunHistoryList = document.getElementById('tradeAgentRunHistoryList');
         const tradeAgentRunHistoryEmpty = document.getElementById('tradeAgentRunHistoryEmpty');
+        const trendScanRunHistoryList = document.getElementById('trendScanRunHistoryList');
+        const trendScanRunHistoryEmpty = document.getElementById('trendScanRunHistoryEmpty');
         const editTradeIdeaModalElement = document.getElementById('editTradeIdeaModal');
         const editTradeIdeaForm = document.getElementById('editTradeIdeaForm');
         const saveTradeIdeaChangesBtn = document.getElementById('saveTradeIdeaChangesBtn');
@@ -987,15 +1097,38 @@
         let activeScreenerCriteria = [];
         const assetRefreshPollHandles = new Map();
         const workspaceToolsStorageKey = 'investingWorkspaceToolsCollapsed';
-        const workspaceAgentStorageKey = 'investingWorkspaceAgentCollapsed';
         let latestTradeAgentRunId = null;
+        let activeAgentMode = 'ticker';
         const editTradeIdeaModal = editTradeIdeaModalElement && window.bootstrap ? new bootstrap.Modal(editTradeIdeaModalElement) : null;
+
+        if (workspaceAgentRail && agentResearchSection) {
+            const toggle = workspaceAgentRail.querySelector('#workspaceAgentCollapseBtn');
+            toggle?.remove();
+            workspaceAgentRail.classList.remove('workspace-rail-shell', 'workspace-agent-card');
+            workspaceAgentRail.classList.add('mb-4');
+            const railSubtitle = workspaceAgentRail.querySelector('.workspace-rail-subtitle');
+            if (railSubtitle) {
+                railSubtitle.textContent = 'Run trade analysis, trend scans, and review recent agent output from the main workspace.';
+            }
+            agentResearchSection.appendChild(workspaceAgentRail);
+        }
+
+        if (workspaceAgentColumn) {
+            workspaceAgentColumn.remove();
+        }
+
+        if (agentResearchSection && watchlistSection && screenersSection && tradeIdeasSection) {
+            workspaceMainColumn.appendChild(agentResearchSection);
+            workspaceMainColumn.appendChild(watchlistSection);
+            workspaceMainColumn.appendChild(screenersSection);
+            workspaceMainColumn.appendChild(tradeIdeasSection);
+        }
 
         function setColumnWidth(element, widthClass) {
             if (!element) {
                 return;
             }
-            ['col-xl-3', 'col-xl-6', 'col-xl-8', 'col-xl-10'].forEach((className) => {
+            ['col-xl-3', 'col-xl-6', 'col-xl-8', 'col-xl-9', 'col-xl-10', 'col-xl-11'].forEach((className) => {
                 element.classList.remove(className);
             });
             if (widthClass) {
@@ -1004,40 +1137,22 @@
         }
 
         function syncWorkspaceRails() {
-            if (!workspaceLayout || !workspaceToolsColumn || !workspaceMainColumn || !workspaceAgentColumn) {
+            if (!workspaceLayout || !workspaceToolsColumn || !workspaceMainColumn) {
                 return;
             }
             const toolsCollapsed = window.localStorage.getItem(workspaceToolsStorageKey) === 'true';
-            const agentCollapsed = window.localStorage.getItem(workspaceAgentStorageKey) === 'true';
 
             workspaceLayout.classList.toggle('is-tools-collapsed', toolsCollapsed);
-            workspaceLayout.classList.toggle('is-agent-collapsed', agentCollapsed);
             workspaceToolsColumn.classList.toggle('is-collapsed', toolsCollapsed);
-            workspaceAgentColumn.classList.toggle('is-collapsed', agentCollapsed);
             workspaceToolsRail?.classList.toggle('is-collapsed', toolsCollapsed);
-            workspaceAgentRail?.classList.toggle('is-collapsed', agentCollapsed);
 
             setColumnWidth(workspaceToolsColumn, toolsCollapsed ? '' : 'col-xl-3');
-            setColumnWidth(workspaceAgentColumn, agentCollapsed ? '' : 'col-xl-3');
-
-            if (toolsCollapsed && agentCollapsed) {
-                setColumnWidth(workspaceMainColumn, 'col-xl-10');
-            } else if (toolsCollapsed || agentCollapsed) {
-                setColumnWidth(workspaceMainColumn, 'col-xl-8');
-            } else {
-                setColumnWidth(workspaceMainColumn, 'col-xl-6');
-            }
+            setColumnWidth(workspaceMainColumn, toolsCollapsed ? 'col-xl-11' : 'col-xl-9');
 
             if (workspaceToolsCollapseBtn) {
                 workspaceToolsCollapseBtn.setAttribute('aria-expanded', String(!toolsCollapsed));
                 workspaceToolsCollapseBtn.setAttribute('title', toolsCollapsed ? 'Expand tools rail' : 'Collapse tools rail');
                 workspaceToolsCollapseBtn.innerHTML = `<i class="fas fa-chevron-${toolsCollapsed ? 'right' : 'left'}"></i>`;
-            }
-
-            if (workspaceAgentCollapseBtn) {
-                workspaceAgentCollapseBtn.setAttribute('aria-expanded', String(!agentCollapsed));
-                workspaceAgentCollapseBtn.setAttribute('title', agentCollapsed ? 'Expand AI research rail' : 'Collapse AI research rail');
-                workspaceAgentCollapseBtn.innerHTML = `<i class="fas fa-chevron-${agentCollapsed ? 'left' : 'right'}"></i>`;
             }
         }
 
@@ -1049,15 +1164,11 @@
             });
         }
 
-        if (workspaceAgentCollapseBtn) {
-            workspaceAgentCollapseBtn.addEventListener('click', () => {
-                const nextState = !(window.localStorage.getItem(workspaceAgentStorageKey) === 'true');
-                window.localStorage.setItem(workspaceAgentStorageKey, nextState ? 'true' : 'false');
-                syncWorkspaceRails();
-            });
-        }
-
         syncWorkspaceRails();
+        document.querySelectorAll('input[name="tradeAgentMode"]').forEach((input) => {
+            input.addEventListener('change', () => setAgentMode(input.value));
+        });
+        setAgentMode(document.querySelector('input[name="tradeAgentMode"]:checked')?.value || 'ticker');
 
         function cloneCriteria(criteria = []) {
             return criteria.map((criterion) => ({
@@ -1262,6 +1373,171 @@
             `;
         }
 
+        function setAgentMode(mode) {
+            activeAgentMode = mode === 'trend' ? 'trend' : 'ticker';
+            tradeAgentForm?.classList.toggle('d-none', activeAgentMode !== 'ticker');
+            trendScanForm?.classList.toggle('d-none', activeAgentMode !== 'trend');
+        }
+
+        function renderTrendScanResult(run) {
+            if (!trendScanResultCard || !trendScanResultBody || !trendScanResultMeta) {
+                return;
+            }
+            trendScanResultCard.classList.remove('d-none');
+            trendScanResultMeta.textContent = `${(run.source_modes || []).join(', ') || 'sources unknown'} · ${run.created_at || 'just now'}`;
+            const warnings = Array.isArray(run.warnings) ? run.warnings : [];
+            const highlights = Array.isArray(run.highlights) ? run.highlights : [];
+            const rankedResults = Array.isArray(run.ranked_results) ? run.ranked_results : [];
+            const sourceStatuses = Array.isArray(run.source_statuses) ? run.source_statuses : [];
+            const highlightHtml = highlights.length ? `
+                <div class="mb-3">
+                    ${highlights.map((item) => `
+                        <div class="border rounded-3 p-3 bg-light mb-2">
+                            <div class="fw-semibold mb-1">${Utils.escapeHtml(item.title || 'Highlight')}</div>
+                            <div class="small text-muted">${Utils.escapeHtml(item.detail || '')}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : '';
+            const warningHtml = warnings.length ? `
+                <div class="alert alert-warning">
+                    <div class="fw-semibold mb-1">Warnings</div>
+                    <ul class="mb-0 ps-3">${warnings.map((warning) => `<li>${Utils.escapeHtml(warning)}</li>`).join('')}</ul>
+                </div>
+            ` : '';
+            const sourceStatusHtml = sourceStatuses.length ? `
+                <div class="border rounded-3 p-3 bg-light mb-3">
+                    <div class="small fw-semibold text-uppercase text-muted mb-2">Source Status</div>
+                    <div class="row g-2 small">
+                        ${sourceStatuses.map((status) => `
+                            <div class="col-md-6">
+                                <span class="text-muted">${Utils.escapeHtml(status.source_name || 'source')}:</span>
+                                ${Utils.escapeHtml(status.status || 'unknown')}
+                                ${status.item_count !== undefined ? ` (${Utils.escapeHtml(String(status.item_count))})` : ''}
+                                ${status.detail ? ` - ${Utils.escapeHtml(status.detail)}` : ''}
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            ` : '';
+            const resultCards = rankedResults.length ? rankedResults.map((result) => {
+                const supportingLinks = (result.supporting_items || []).slice(0, 3).map((item) => {
+                    const label = item.author_or_source || item.source_name || 'Source';
+                    const title = item.title || item.url || 'Open';
+                    return item.url
+                        ? `<a href="${Utils.escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" class="small d-block">${Utils.escapeHtml(label)}: ${Utils.escapeHtml(title)}</a>`
+                        : `<div class="small text-muted">${Utils.escapeHtml(label)}: ${Utils.escapeHtml(title)}</div>`;
+                }).join('');
+                const analysis = result.trade_agent_run ? `
+                    <div class="border-top pt-2 mt-2">
+                        <div class="small fw-semibold text-uppercase text-muted mb-1">Ticker Analysis</div>
+                        <div class="small">${Utils.escapeHtml((result.trade_agent_run.analysis || {}).thesis_summary || 'No follow-up analysis available.')}</div>
+                    </div>
+                ` : (result.trade_agent_error ? `
+                    <div class="border-top pt-2 mt-2">
+                        <div class="small text-muted">${Utils.escapeHtml(result.trade_agent_error)}</div>
+                    </div>
+                ` : '');
+                return `
+                    <div class="border rounded-3 p-3 mb-3">
+                        <div class="d-flex justify-content-between align-items-start gap-3">
+                            <div>
+                                <div class="fw-semibold">${Utils.escapeHtml(result.symbol || 'Unknown')}</div>
+                                <div class="small text-muted">${Utils.escapeHtml(result.reason_summary || 'Trend candidate')}</div>
+                            </div>
+                            <span class="badge bg-light text-dark">Score ${Utils.escapeHtml(String(result.score ?? 'N/A'))}</span>
+                        </div>
+                        <div class="small text-muted mt-2">Mentions ${Utils.escapeHtml(String(result.mention_count || 0))} · Sources ${Utils.escapeHtml(String(result.source_count || 0))} · ${Utils.escapeHtml((result.source_types || []).join(', '))}</div>
+                        <div class="mt-2">${supportingLinks || '<div class="small text-muted">No supporting links stored.</div>'}</div>
+                        ${analysis}
+                    </div>
+                `;
+            }).join('') : '<div class="text-muted small">No ranked candidates found.</div>';
+
+            trendScanResultBody.innerHTML = `
+                <div class="border rounded-3 p-3 bg-light mb-3">
+                    <div class="row g-2 small">
+                        <div class="col-md-4"><span class="text-muted">Generation:</span> ${Utils.escapeHtml(run.generation_mode || 'deterministic')}</div>
+                        <div class="col-md-4"><span class="text-muted">Provider:</span> ${Utils.escapeHtml(run.provider || 'none')}</div>
+                        <div class="col-md-4"><span class="text-muted">Model:</span> ${Utils.escapeHtml(run.model || 'none')}</div>
+                        <div class="col-md-4"><span class="text-muted">Tokens:</span> ${Utils.escapeHtml(String((run.token_usage || {}).total_tokens || 'N/A'))}</div>
+                    </div>
+                </div>
+                <p class="mb-3">${Utils.escapeHtml(run.summary || 'No summary available.')}</p>
+                ${sourceStatusHtml}
+                ${highlightHtml}
+                ${warningHtml}
+                ${resultCards}
+            `;
+        }
+
+        function prependTrendScanRunHistory(run) {
+            if (!trendScanRunHistoryList || !run) {
+                return;
+            }
+            trendScanRunHistoryEmpty?.classList.add('d-none');
+            trendScanRunHistoryList.classList.remove('d-none');
+            const item = document.createElement('div');
+            item.className = 'list-group-item px-0';
+            item.setAttribute('data-trend-scan-run-id', run.id);
+            item.innerHTML = `
+                <div class="d-flex justify-content-between align-items-start gap-3">
+                    <div>
+                        <div class="fw-semibold">${Utils.escapeHtml(run.scenario_prompt || 'Trend scan')}</div>
+                        <div class="small text-muted text-uppercase">${Utils.escapeHtml(((run.ranked_results || []).slice(0, 3).map((entry) => entry.symbol).join(', ')) || 'no symbols')}</div>
+                        <div class="small text-muted">${Utils.escapeHtml(run.created_at || '')}</div>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-secondary view-trend-scan-run-btn" data-run-id="${run.id}">
+                            View
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger delete-trend-scan-run-btn" data-run-id="${run.id}">
+                            Delete
+                        </button>
+                    </div>
+                </div>
+            `;
+            trendScanRunHistoryList.prepend(item);
+            bindTrendScanHistoryButtons();
+        }
+
+        function bindTrendScanHistoryButtons() {
+            document.querySelectorAll('.view-trend-scan-run-btn').forEach((button) => {
+                button.onclick = async () => {
+                    try {
+                        const payload = await InvestingApi.getTrendScanRun(button.getAttribute('data-run-id'));
+                        renderTrendScanResult(payload.run);
+                        trendScanResultCard?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    } catch (error) {
+                        Utils.showNotification(error.message || 'Failed to load trend scan run', 'danger');
+                    }
+                };
+            });
+            document.querySelectorAll('.delete-trend-scan-run-btn').forEach((button) => {
+                if (button.dataset.boundDelete === 'true') {
+                    return;
+                }
+                button.dataset.boundDelete = 'true';
+                button.onclick = async () => {
+                    const runId = button.getAttribute('data-run-id');
+                    if (!window.confirm('Delete this trend scan run?')) {
+                        return;
+                    }
+                    try {
+                        await InvestingApi.deleteTrendScanRun(runId);
+                        button.closest('[data-trend-scan-run-id], .list-group-item')?.remove();
+                        if (trendScanRunHistoryList && !trendScanRunHistoryList.children.length) {
+                            trendScanRunHistoryList.classList.add('d-none');
+                            trendScanRunHistoryEmpty?.classList.remove('d-none');
+                        }
+                        Utils.showNotification('Trend scan run deleted', 'success');
+                    } catch (error) {
+                        Utils.showNotification(error.message || 'Failed to delete trend scan run', 'danger');
+                    }
+                };
+            });
+        }
+
         function prependTradeAgentRunHistory(run) {
             if (!tradeAgentRunHistoryList) {
                 return;
@@ -1272,6 +1548,7 @@
             tradeAgentRunHistoryList.classList.remove('d-none');
             const item = document.createElement('div');
             item.className = 'list-group-item px-0';
+            item.setAttribute('data-trade-agent-run-id', run.id);
             item.innerHTML = `
                 <div class="d-flex justify-content-between align-items-start gap-3">
                         <div>
@@ -1282,6 +1559,7 @@
                         </div>
                     <div class="d-flex gap-2">
                         <button type="button" class="btn btn-sm btn-outline-secondary view-trade-agent-run-btn" data-run-id="${run.id}">View</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger delete-trade-agent-run-btn" data-run-id="${run.id}">Delete</button>
                         ${run.created_trade_idea_id ? '<span class="badge bg-success-subtle text-success border align-self-center">Saved</span>' : ''}
                     </div>
                 </div>
@@ -1304,6 +1582,33 @@
                         tradeAgentResultCard?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     } catch (error) {
                         Utils.showNotification(error.message || 'Failed to load trade-agent run', 'danger');
+                    }
+                });
+            });
+            scope.querySelectorAll('.delete-trade-agent-run-btn').forEach((button) => {
+                if (button.dataset.bound === 'true') {
+                    return;
+                }
+                button.dataset.bound = 'true';
+                button.addEventListener('click', async () => {
+                    const runId = button.getAttribute('data-run-id');
+                    if (!window.confirm('Delete this trade-agent run?')) {
+                        return;
+                    }
+                    try {
+                        await InvestingApi.deleteTradeAgentRun(runId);
+                        button.closest('[data-trade-agent-run-id], .list-group-item')?.remove();
+                        if (String(latestTradeAgentRunId) === String(runId)) {
+                            latestTradeAgentRunId = null;
+                            tradeAgentResultCard?.classList.add('d-none');
+                        }
+                        if (tradeAgentRunHistoryList && !tradeAgentRunHistoryList.children.length) {
+                            tradeAgentRunHistoryList.classList.add('d-none');
+                            tradeAgentRunHistoryEmpty?.classList.remove('d-none');
+                        }
+                        Utils.showNotification('Trade-agent run deleted', 'success');
+                    } catch (error) {
+                        Utils.showNotification(error.message || 'Failed to delete trade-agent run', 'danger');
                     }
                 });
             });
@@ -1680,6 +1985,42 @@
             });
         }
 
+        if (trendScanForm) {
+            trendScanForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const scenarioPrompt = document.getElementById('trendScanPrompt').value.trim();
+                const sourceModes = Array.from(document.querySelectorAll('.trend-source-checkbox:checked')).map((input) => input.value);
+                const maxResults = document.getElementById('trendScanMaxResults').value;
+                if (!scenarioPrompt) {
+                    Utils.showNotification('Trend scan prompt is required', 'warning');
+                    return;
+                }
+
+                if (trendScanRunBtn) {
+                    trendScanRunBtn.disabled = true;
+                    trendScanRunBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Scanning...';
+                }
+
+                try {
+                    const payload = await InvestingApi.runTrendScan({
+                        scenario_prompt: scenarioPrompt,
+                        source_modes: sourceModes,
+                        max_results: maxResults
+                    });
+                    renderTrendScanResult(payload.run);
+                    prependTrendScanRunHistory(payload.run);
+                    Utils.showNotification('Trend scan completed', 'success');
+                } catch (error) {
+                    Utils.showNotification(error.message || 'Failed to run trend scan', 'danger');
+                } finally {
+                    if (trendScanRunBtn) {
+                        trendScanRunBtn.disabled = false;
+                        trendScanRunBtn.innerHTML = '<i class="fas fa-wave-square me-1"></i>Run Trend Scan';
+                    }
+                }
+            });
+        }
+
         if (saveTradeAgentIdeaBtn) {
             saveTradeAgentIdeaBtn.addEventListener('click', async () => {
                 if (!latestTradeAgentRunId) {
@@ -1728,6 +2069,7 @@
         }
 
         bindTradeAgentHistoryButtons();
+        bindTrendScanHistoryButtons();
         bindTradeIdeaButtons();
 
         addSymbolForms.forEach((form) => {
