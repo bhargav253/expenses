@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 from sqlalchemy.exc import OperationalError
+from sqlalchemy import event
 try:
     import yfinance as yf
 except Exception:  # pragma: no cover - graceful fallback when optional dependency is absent
@@ -49,6 +50,21 @@ WORKER_STDOUT_ENABLED = os.environ.get("TICKER_WORKER_STDOUT", "true").lower() =
 WORKER_VERBOSE_IDLE = os.environ.get("TICKER_WORKER_VERBOSE_IDLE", "false").lower() == "true"
 WORKER_VERBOSE_EVENTS = os.environ.get("TICKER_WORKER_VERBOSE_EVENTS", "false").lower() == "true"
 WORKER_HEARTBEAT_INTERVAL = timedelta(seconds=int(os.environ.get("TICKER_WORKER_HEARTBEAT_SECONDS", "60")))
+GLOBAL_METRICS_LOCK = threading.Lock()
+GLOBAL_METRICS = {
+    "api_requests_total": 0,
+    "yfinance_requests_total": 0,
+    "yfinance_intraday_requests_total": 0,
+    "yfinance_close_requests_total": 0,
+    "finnhub_requests_total": 0,
+    "db_statements_total": 0,
+    "db_select_total": 0,
+    "db_insert_total": 0,
+    "db_update_total": 0,
+    "db_delete_total": 0,
+    "db_other_total": 0,
+}
+DB_INSTRUMENTATION_INSTALLED = False
 
 
 def utcnow():
@@ -195,6 +211,44 @@ def _needs_market_close_fill(fetch_state: TickerFetchState, target_trade_date: d
 def emit_worker_status(message):
     if WORKER_STDOUT_ENABLED:
         print(message, flush=True)
+
+
+def _increment_global_metric(name: str, value: int = 1):
+    with GLOBAL_METRICS_LOCK:
+        GLOBAL_METRICS[name] = GLOBAL_METRICS.get(name, 0) + value
+
+
+def _get_global_metrics_snapshot():
+    with GLOBAL_METRICS_LOCK:
+        return dict(GLOBAL_METRICS)
+
+
+def _record_provider_request(kind: str):
+    _increment_global_metric("api_requests_total", 1)
+    _increment_global_metric(f"{kind}_requests_total", 1)
+
+
+def install_db_metrics(engine):
+    global DB_INSTRUMENTATION_INSTALLED
+    if DB_INSTRUMENTATION_INSTALLED:
+        return
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _count_db_statements(conn, cursor, statement, parameters, context, executemany):
+        sql = (statement or "").lstrip().lower()
+        _increment_global_metric("db_statements_total", 1)
+        if sql.startswith("select"):
+            _increment_global_metric("db_select_total", 1)
+        elif sql.startswith("insert"):
+            _increment_global_metric("db_insert_total", 1)
+        elif sql.startswith("update"):
+            _increment_global_metric("db_update_total", 1)
+        elif sql.startswith("delete"):
+            _increment_global_metric("db_delete_total", 1)
+        else:
+            _increment_global_metric("db_other_total", 1)
+
+    DB_INSTRUMENTATION_INSTALLED = True
 
 
 def _format_session_state(session_info):
@@ -748,6 +802,7 @@ class TickerIngestionWorker:
             intraday_next_window = "now" if due_in.total_seconds() <= 0 else f"{int(due_in.total_seconds())}s"
         yfinance_snapshot = self.yfinance_budget.snapshot()
         finnhub_snapshot = self.rate_budget.snapshot()
+        global_metrics = _get_global_metrics_snapshot()
         rows = [
             ("lane", self.lane_label()),
             ("market", _format_session_state(session_info)),
@@ -762,6 +817,12 @@ class TickerIngestionWorker:
             ("yf intraday req", self.stats["yfinance_intraday_requests"]),
             ("yf close req", self.stats["yfinance_close_requests"]),
             ("finnhub req", self.stats["finnhub_requests"]),
+            ("api req total", global_metrics["api_requests_total"]),
+            ("db req total", global_metrics["db_statements_total"]),
+            ("db select", global_metrics["db_select_total"]),
+            ("db insert", global_metrics["db_insert_total"]),
+            ("db update", global_metrics["db_update_total"]),
+            ("db delete", global_metrics["db_delete_total"]),
             ("yfinance window", intraday_next_window),
             ("yf remaining/min", yfinance_snapshot["remaining"]),
             ("fh remaining/min", finnhub_snapshot["remaining"]),
@@ -1173,12 +1234,16 @@ class TickerPriorityWorker(TickerIngestionWorker):
                 self.yfinance_budget.consume()
                 self.stats["yfinance_requests"] += 1
                 self.stats["yfinance_intraday_requests"] += 1
+                _record_provider_request("yfinance")
+                _increment_global_metric("yfinance_intraday_requests_total", 1)
                 bars_by_symbol = self.price_client.get_hourly_bars(symbols)
                 self.last_intraday_batch_at = utcnow()
             elif fetch_mode == "close_fill":
                 self.yfinance_budget.consume()
                 self.stats["yfinance_requests"] += 1
                 self.stats["yfinance_close_requests"] += 1
+                _record_provider_request("yfinance")
+                _increment_global_metric("yfinance_close_requests_total", 1)
                 daily_bars_by_symbol = self.price_client.get_daily_bars(symbols)
                 self.last_intraday_batch_at = utcnow()
         except Exception as exc:
@@ -1195,6 +1260,8 @@ class TickerPriorityWorker(TickerIngestionWorker):
                 self.yfinance_budget.consume()
                 self.stats["yfinance_requests"] += 1
                 self.stats["yfinance_close_requests"] += 1
+                _record_provider_request("yfinance")
+                _increment_global_metric("yfinance_close_requests_total", 1)
                 daily_bars_by_symbol = self.price_client.get_daily_bars(symbols)
             except Exception as exc:
                 logger.exception("ticker_worker postclose_daily_batch_failed mode=%s symbols=%s", batch_label, ",".join(symbols))
@@ -1289,6 +1356,7 @@ class TickerPriorityWorker(TickerIngestionWorker):
         try:
             self.rate_budget.consume()
             self.stats["finnhub_requests"] += 1
+            _record_provider_request("finnhub")
             payload = self.client.get_basic_financials(asset.symbol)
             profile = self._fetch_profile(asset.symbol)
             self._apply_profile(asset, profile)
@@ -1349,6 +1417,7 @@ class TickerPriorityWorker(TickerIngestionWorker):
     def _fetch_profile(self, symbol: str):
         self.rate_budget.consume()
         self.stats["finnhub_requests"] += 1
+        _record_provider_request("finnhub")
         payload = self.client.get_company_profile(symbol)
         return payload or {}
 
@@ -1836,6 +1905,8 @@ def main():
         os.environ["SQLALCHEMY_DATABASE_URI"] = args.database_url
 
     from app import app
+    with app.app_context():
+        install_db_metrics(db.engine)
 
     if args.mode == "market":
         with app.app_context():
