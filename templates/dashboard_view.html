@@ -185,12 +185,15 @@
     .yearly-pivot-table {
         min-width: 980px;
         margin-bottom: 0;
+        border-collapse: separate;
+        border-spacing: 0;
     }
 
     .yearly-pivot-table th,
     .yearly-pivot-table td {
         white-space: nowrap;
         background: #fff;
+        background-clip: padding-box;
     }
 
     .yearly-pivot-table thead th {
@@ -233,6 +236,11 @@
 
     .yearly-pivot-table .monthly-total-row .sticky-total {
         background: #dce8ff;
+    }
+
+    .yearly-pivot-table tbody .sticky-category,
+    .yearly-pivot-table tbody .sticky-total {
+        position: sticky;
     }
 
     @media (max-width: 991.98px) {
