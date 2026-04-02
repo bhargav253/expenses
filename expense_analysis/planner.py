@@ -134,23 +134,34 @@ def _detect_artifact_preference(text: str) -> Optional[str]:
 
 def is_follow_up_prompt(prompt: str) -> bool:
     text = _normalize_text(prompt)
-    return any(
-        token in text
-        for token in [
-            "also add",
-            "add ",
-            "include ",
-            "same plot",
-            "same chart",
-            "to the plot",
-            "to the chart",
-            "remove ",
-            "drop ",
-            "switch to",
-            "use a ",
-            "make it a ",
-        ]
-    )
+    follow_up_tokens = [
+        "also add",
+        "add ",
+        "include ",
+        "same plot",
+        "same chart",
+        "same month",
+        "same months",
+        "same period",
+        "same year",
+        "same years",
+        "to the plot",
+        "to the chart",
+        "remove ",
+        "drop ",
+        "switch to",
+        "use a ",
+        "make it a ",
+        "compare it with",
+        "compare this with",
+        "compare that with",
+        "compare with",
+        "vs ",
+        "versus ",
+    ]
+    if any(token in text for token in follow_up_tokens):
+        return True
+    return bool(re.search(r"\b(compare|add|include)\b.*\b(it|this|that|same)\b", text))
 
 
 def merge_follow_up_request(

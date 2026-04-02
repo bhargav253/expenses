@@ -1897,6 +1897,13 @@ def validate_safe_sql(sql_text: str) -> bool:
         return False
     return True
 
+
+def month_key_expr():
+    dialect = db.engine.dialect.name
+    if dialect == 'postgresql':
+        return db.func.to_char(Expense.date, 'YYYY-MM')
+    return db.func.strftime('%Y-%m', Expense.date)
+
 def generate_ai_analytics_sql(user, prompt):
     """Ask the configured AI provider to produce a safe SELECT for analytics."""
     # Respect test mode / missing keys
@@ -1924,7 +1931,7 @@ Return a JSON object with keys: chart_type (bar|pie|table), sql (SELECT ...), su
 Rules:
 - Only SELECT statements. No DML/DDL.
 - Always alias the first column as label and the numeric aggregate as value.
-- For bar charts, group by month: strftime('%Y-%m', date) as label, SUM(amount) as value, ordered by month.
+- For bar charts, group by month using a database-compatible year-month key, alias it as label, and order by label.
 - For pie charts, group by category: category as label, SUM(amount) as value.
 - For tables, mirror the bar/pie grouping but still return label/value columns.
 - Scope to the dashboard_id provided in the input.
@@ -1937,7 +1944,8 @@ Respond ONLY with JSON, no prose.
 User request: {prompt}
 Dashboard scope: use dashboard_id = {{dashboard_id}}
 Output JSON keys: chart_type, sql, summary.
-Example SQL for bar: SELECT strftime('%Y-%m', date) as label, SUM(amount) as value FROM expense WHERE dashboard_id={{dashboard_id}} GROUP BY label ORDER BY label;
+Example SQL for Postgres: SELECT to_char(date, 'YYYY-MM') as label, SUM(amount) as value FROM expense WHERE dashboard_id={{dashboard_id}} GROUP BY label ORDER BY label;
+Example SQL for SQLite: SELECT strftime('%Y-%m', date) as label, SUM(amount) as value FROM expense WHERE dashboard_id={{dashboard_id}} GROUP BY label ORDER BY label;
 """
 
     payload = {
@@ -4723,7 +4731,7 @@ def get_expenses_by_month(dashboard_id, month):
         return jsonify({'error': 'Invalid month format. Use YYYY-MM'}), 400
     
     expenses = Expense.query.filter_by(dashboard_id=dashboard_id).filter(
-        db.func.strftime('%Y-%m', Expense.date) == month
+        month_key_expr() == month
     ).all()
     
     expense_data = []

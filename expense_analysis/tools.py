@@ -7,6 +7,7 @@ from typing import Optional
 
 from sqlalchemy import func
 
+from extensions import db
 from models import Expense, User
 
 from .contracts import DateRange
@@ -28,6 +29,9 @@ def _apply_date_range(query, date_range: DateRange):
 
 
 def _period_key_expr(granularity: str):
+    dialect = db.engine.dialect.name
+    if dialect == "postgresql":
+        return func.to_char(Expense.date, "YYYY") if granularity == "year" else func.to_char(Expense.date, "YYYY-MM")
     return func.strftime("%Y", Expense.date) if granularity == "year" else func.strftime("%Y-%m", Expense.date)
 
 

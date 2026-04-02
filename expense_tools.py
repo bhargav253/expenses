@@ -58,16 +58,23 @@ def base_expense_query(dashboard_id, user_id=None):
     return query
 
 
+def period_key_expr(granularity='month'):
+    dialect = db.engine.dialect.name
+    if dialect == 'postgresql':
+        return func.to_char(Expense.date, 'YYYY') if granularity == 'year' else func.to_char(Expense.date, 'YYYY-MM')
+    return func.strftime('%Y', Expense.date) if granularity == 'year' else func.strftime('%Y-%m', Expense.date)
+
+
 def monthly_spend_trend(dashboard_id, category=None, months=6, user_id=None, years=None):
     query = base_expense_query(dashboard_id, user_id=user_id)
     if category:
         query = query.filter(func.lower(Expense.category) == category.lower())
     if years:
-        query = query.filter(func.strftime('%Y', Expense.date).in_(years))
+        query = query.filter(period_key_expr('year').in_(years))
 
     results = (
         query.with_entities(
-            func.strftime('%Y-%m', Expense.date).label('month'),
+            period_key_expr('month').label('month'),
             func.sum(Expense.amount).label('total')
         )
         .group_by('month')
