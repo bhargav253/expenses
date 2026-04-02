@@ -2513,15 +2513,10 @@ class DashboardManager {
                 <div class="year-section mb-4">
                     <h5 class="text-primary mb-3">${year}</h5>
                     <div class="table-responsive yearly-pivot-scroll">
-                        <table class="table table-bordered table-sm yearly-pivot-table">
-                            <thead class="table-light">
-                                <tr>
-                                    <th class="sticky-category">Category</th>
-                                    ${monthHeaders.map(month => `<th>${month}</th>`).join('')}
-                                    <th class="table-primary sticky-total">Total</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+                        <div class="yearly-pivot-grid">
+                            <div class="yearly-pivot-cell is-header sticky-category">Category</div>
+                            ${monthHeaders.map(month => `<div class="yearly-pivot-cell is-header is-number">${month}</div>`).join('')}
+                            <div class="yearly-pivot-cell is-header is-number sticky-total">Total</div>
             `;
             
             // Category rows
@@ -2532,34 +2527,29 @@ class DashboardManager {
                     const monthCells = monthNames.map(month => {
                         const amount = rowData[month] || 0;
                         categoryTotal += amount;
-                        return `<td class="text-end">${amount > 0 ? Utils.formatCurrency(amount) : '-'}</td>`;
+                        return `<div class="yearly-pivot-cell is-number">${amount > 0 ? Utils.formatCurrency(amount) : '-'}</div>`;
                     }).join('');
                     
                     html += `
-                        <tr>
-                            <td class="fw-bold text-capitalize sticky-category">${category}</td>
+                            <div class="yearly-pivot-cell is-row-header sticky-category">${category}</div>
                             ${monthCells}
-                            <td class="text-end fw-bold table-primary sticky-total">${categoryTotal > 0 ? Utils.formatCurrency(categoryTotal) : '-'}</td>
-                        </tr>
+                            <div class="yearly-pivot-cell is-number sticky-total">${categoryTotal > 0 ? Utils.formatCurrency(categoryTotal) : '-'}</div>
                     `;
                 }
             });
             
             // Monthly totals row
             html += `
-                        <tr class="table-secondary monthly-total-row">
-                            <td class="fw-bold sticky-category">Monthly Total</td>
+                            <div class="yearly-pivot-cell is-monthly-total sticky-category">Monthly Total</div>
                             ${monthNames.map(month => {
                                 const amount = monthlyTotals[month] || 0;
-                                return `<td class="text-end fw-bold">${amount > 0 ? Utils.formatCurrency(amount) : '-'}</td>`;
+                                return `<div class="yearly-pivot-cell is-number is-monthly-total">${amount > 0 ? Utils.formatCurrency(amount) : '-'}</div>`;
                             }).join('')}
-                            <td class="text-end fw-bold table-primary sticky-total">${yearlyTotal > 0 ? Utils.formatCurrency(yearlyTotal) : '-'}</td>
-                        </tr>
+                            <div class="yearly-pivot-cell is-number is-monthly-total sticky-total">${yearlyTotal > 0 ? Utils.formatCurrency(yearlyTotal) : '-'}</div>
             `;
             
             html += `
-                            </tbody>
-                        </table>
+                        </div>
                     </div>
                 </div>
             `;

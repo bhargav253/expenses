@@ -182,65 +182,88 @@
         background: #fff;
     }
 
-    .yearly-pivot-table {
-        min-width: 980px;
-        margin-bottom: 0;
-        border-collapse: separate;
-        border-spacing: 0;
+    .yearly-pivot-grid {
+        display: grid;
+        grid-template-columns: 12rem repeat(12, minmax(6.5rem, 1fr)) 8rem;
+        min-width: 1100px;
+        align-items: stretch;
     }
 
-    .yearly-pivot-table th,
-    .yearly-pivot-table td {
+    .yearly-pivot-cell {
         white-space: nowrap;
         background: #fff;
         background-clip: padding-box;
+        padding: 0.5rem 0.75rem;
+        border-right: 1px solid rgba(15, 23, 42, 0.12);
+        border-bottom: 1px solid rgba(15, 23, 42, 0.12);
+        min-height: 2.75rem;
+        display: flex;
+        align-items: center;
     }
 
-    .yearly-pivot-table thead th {
-        position: sticky;
-        top: 0;
-        z-index: 2;
+    .yearly-pivot-cell.is-header {
+        font-weight: 700;
         background: rgba(248, 250, 252, 0.98);
     }
 
-    .yearly-pivot-table .sticky-category {
+    .yearly-pivot-cell.is-number {
+        justify-content: flex-end;
+        text-align: right;
+    }
+
+    .yearly-pivot-cell.sticky-category {
+        position: -webkit-sticky;
         position: sticky;
         left: 0;
         z-index: 3;
         background: #fff;
         box-shadow: 1px 0 0 rgba(15, 23, 42, 0.12);
+        min-width: 12rem;
+        max-width: 12rem;
     }
 
-    .yearly-pivot-table thead .sticky-category {
+    .yearly-pivot-cell.is-header.sticky-category {
         z-index: 4;
         background: rgba(248, 250, 252, 0.98);
     }
 
-    .yearly-pivot-table .sticky-total {
+    .yearly-pivot-cell.sticky-total {
+        position: -webkit-sticky;
         position: sticky;
         right: 0;
         z-index: 3;
         background: #eef4ff;
         box-shadow: -1px 0 0 rgba(15, 23, 42, 0.12);
+        min-width: 8rem;
+        max-width: 8rem;
     }
 
-    .yearly-pivot-table thead .sticky-total {
+    .yearly-pivot-cell.is-header.sticky-total {
         z-index: 4;
         background: #dce8ff;
     }
 
-    .yearly-pivot-table .monthly-total-row td,
-    .yearly-pivot-table .monthly-total-row .sticky-category {
-        background: #eef1f5;
+    .yearly-pivot-cell.is-row-header {
+        font-weight: 600;
+        text-transform: capitalize;
     }
 
-    .yearly-pivot-table .monthly-total-row .sticky-total {
+    .yearly-pivot-cell.is-monthly-total,
+    .yearly-pivot-cell.is-monthly-total.sticky-category {
+        background: #eef1f5;
+        font-weight: 700;
+    }
+
+    .yearly-pivot-cell.is-monthly-total.sticky-total {
         background: #dce8ff;
     }
 
-    .yearly-pivot-table tbody .sticky-category,
-    .yearly-pivot-table tbody .sticky-total {
-        position: sticky;
+    .yearly-pivot-grid > .yearly-pivot-cell:nth-child(14n) {
+        border-right: 0;
+    }
+
+    .yearly-pivot-grid .yearly-pivot-cell:nth-last-child(-n + 14) {
+        border-bottom: 0;
     }
 
     @media (max-width: 991.98px) {
