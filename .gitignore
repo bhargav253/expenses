@@ -7,3 +7,4 @@ env.example
 .env.example
 *.db
 scripts/temp_load
+.codex

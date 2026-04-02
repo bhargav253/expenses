@@ -174,6 +174,67 @@
         color: #0f172a !important;
     }
 
+    .yearly-pivot-scroll {
+        overflow-x: auto;
+        overflow-y: visible;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        border-radius: 0.75rem;
+        background: #fff;
+    }
+
+    .yearly-pivot-table {
+        min-width: 980px;
+        margin-bottom: 0;
+    }
+
+    .yearly-pivot-table th,
+    .yearly-pivot-table td {
+        white-space: nowrap;
+        background: #fff;
+    }
+
+    .yearly-pivot-table thead th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: rgba(248, 250, 252, 0.98);
+    }
+
+    .yearly-pivot-table .sticky-category {
+        position: sticky;
+        left: 0;
+        z-index: 3;
+        background: #fff;
+        box-shadow: 1px 0 0 rgba(15, 23, 42, 0.12);
+    }
+
+    .yearly-pivot-table thead .sticky-category {
+        z-index: 4;
+        background: rgba(248, 250, 252, 0.98);
+    }
+
+    .yearly-pivot-table .sticky-total {
+        position: sticky;
+        right: 0;
+        z-index: 3;
+        background: #eef4ff;
+        box-shadow: -1px 0 0 rgba(15, 23, 42, 0.12);
+    }
+
+    .yearly-pivot-table thead .sticky-total {
+        z-index: 4;
+        background: #dce8ff;
+    }
+
+    .yearly-pivot-table .monthly-total-row td,
+    .yearly-pivot-table .monthly-total-row .sticky-category {
+        background: #eef1f5;
+    }
+
+    .yearly-pivot-table .monthly-total-row .sticky-total {
+        background: #dce8ff;
+    }
+
     @media (max-width: 991.98px) {
         .ingress-rail-shell {
             position: static;
@@ -537,7 +598,7 @@
                             Yearly overview showing aggregated expense data across all months.
                         </div>
                         <div class="table-responsive">
-                            <table class="table table-striped" id="yearlyTable"></table>
+                            <div id="yearlyTable"></div>
                         </div>
                     </div>
                 </div>

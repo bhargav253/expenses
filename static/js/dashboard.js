@@ -2512,13 +2512,13 @@ class DashboardManager {
             html += `
                 <div class="year-section mb-4">
                     <h5 class="text-primary mb-3">${year}</h5>
-                    <div class="table-responsive">
-                        <table class="table table-bordered table-sm">
+                    <div class="table-responsive yearly-pivot-scroll">
+                        <table class="table table-bordered table-sm yearly-pivot-table">
                             <thead class="table-light">
                                 <tr>
-                                    <th>Category</th>
+                                    <th class="sticky-category">Category</th>
                                     ${monthHeaders.map(month => `<th>${month}</th>`).join('')}
-                                    <th class="table-primary">Total</th>
+                                    <th class="table-primary sticky-total">Total</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -2537,9 +2537,9 @@ class DashboardManager {
                     
                     html += `
                         <tr>
-                            <td class="fw-bold text-capitalize">${category}</td>
+                            <td class="fw-bold text-capitalize sticky-category">${category}</td>
                             ${monthCells}
-                            <td class="text-end fw-bold table-primary">${categoryTotal > 0 ? Utils.formatCurrency(categoryTotal) : '-'}</td>
+                            <td class="text-end fw-bold table-primary sticky-total">${categoryTotal > 0 ? Utils.formatCurrency(categoryTotal) : '-'}</td>
                         </tr>
                     `;
                 }
@@ -2547,13 +2547,13 @@ class DashboardManager {
             
             // Monthly totals row
             html += `
-                        <tr class="table-secondary">
-                            <td class="fw-bold">Monthly Total</td>
+                        <tr class="table-secondary monthly-total-row">
+                            <td class="fw-bold sticky-category">Monthly Total</td>
                             ${monthNames.map(month => {
                                 const amount = monthlyTotals[month] || 0;
                                 return `<td class="text-end fw-bold">${amount > 0 ? Utils.formatCurrency(amount) : '-'}</td>`;
                             }).join('')}
-                            <td class="text-end fw-bold table-primary">${yearlyTotal > 0 ? Utils.formatCurrency(yearlyTotal) : '-'}</td>
+                            <td class="text-end fw-bold table-primary sticky-total">${yearlyTotal > 0 ? Utils.formatCurrency(yearlyTotal) : '-'}</td>
                         </tr>
             `;
             
