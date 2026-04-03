@@ -205,6 +205,21 @@ const ApiClient = {
         cancel: (dashboardId, sessionId) => ApiClient.request(`/api/dashboard/${dashboardId}/analytics/session/${sessionId}`, {
             method: 'DELETE'
         })
+    },
+
+    mappingRules: {
+        list: () => ApiClient.request('/api/settings/mapping-rules'),
+        create: (data) => ApiClient.request('/api/settings/mapping-rules', {
+            method: 'POST',
+            body: data
+        }),
+        update: (id, data) => ApiClient.request(`/api/settings/mapping-rules/${id}`, {
+            method: 'PUT',
+            body: data
+        }),
+        delete: (id) => ApiClient.request(`/api/settings/mapping-rules/${id}`, {
+            method: 'DELETE'
+        })
     }
 };
 

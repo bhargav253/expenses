@@ -7,6 +7,8 @@ class DashboardManager {
         this.currentSessionId = null;
         this.currentCsvData = null;
         this.currentSource = null;
+        this.mappingRuleSets = [];
+        this.selectedMappingRuleSetId = null;
         this.csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
         this.isTouchDevice = this.detectTouchDevice();
         this.lastSelectionRange = null;
@@ -21,6 +23,7 @@ class DashboardManager {
         this.setupAiChat();
         this.setupTableEditors();
         this.setupEventListeners();
+        this.loadMappingRules();
     }
 
     detectTouchDevice() {
@@ -31,6 +34,185 @@ class DashboardManager {
             (hasNavigator && navigator.maxTouchPoints > 0) ||
             (hasWindow && window.matchMedia && window.matchMedia('(pointer: coarse)').matches)
         );
+    }
+
+    async loadMappingRules() {
+        try {
+            const response = await ApiClient.mappingRules.list();
+            this.mappingRuleSets = response.rule_sets || [];
+            const defaultRuleSet = this.mappingRuleSets.find((ruleSet) => ruleSet.is_default) || this.mappingRuleSets[0];
+            this.selectedMappingRuleSetId = defaultRuleSet ? defaultRuleSet.id : null;
+            this.renderMappingRuleSelector();
+        } catch (error) {
+            debug.error('Failed to load mapping rules:', error);
+        }
+    }
+
+    renderMappingRuleSelector() {
+        const select = document.getElementById('mappingRuleSelect');
+        const applyBtn = document.getElementById('applyMappingRulesBtn');
+        const status = document.getElementById('mappingRuleStatus');
+        if (!select) {
+            return;
+        }
+
+        select.innerHTML = '';
+        if (!this.mappingRuleSets.length) {
+            select.disabled = true;
+            if (applyBtn) {
+                applyBtn.disabled = true;
+            }
+            if (status) {
+                status.textContent = 'No mapping rules available yet.';
+            }
+            return;
+        }
+
+        this.mappingRuleSets.forEach((ruleSet) => {
+            const option = document.createElement('option');
+            option.value = ruleSet.id;
+            option.textContent = ruleSet.is_default ? `${ruleSet.name} (Default)` : ruleSet.name;
+            if (Number(ruleSet.id) === Number(this.selectedMappingRuleSetId)) {
+                option.selected = true;
+            }
+            select.appendChild(option);
+        });
+
+        select.disabled = false;
+        if (applyBtn) {
+            applyBtn.disabled = !this.currentCsvData;
+        }
+        if (status) {
+            const selected = this.getSelectedMappingRuleSet();
+            status.textContent = selected
+                ? `Using ${selected.name} for import categorization.`
+                : 'Select a mapping rule set for import categorization.';
+        }
+
+        if (!select.dataset.bound) {
+            select.addEventListener('change', async (event) => {
+                this.selectedMappingRuleSetId = Number(event.target.value);
+                await this.persistSelectedMappingRuleSet();
+                this.renderMappingRuleSelector();
+            });
+            select.dataset.bound = 'true';
+        }
+
+        if (applyBtn && !applyBtn.dataset.bound) {
+            applyBtn.addEventListener('click', async () => {
+                await this.applySelectedMappingRulesToCurrentCsv(true);
+            });
+            applyBtn.dataset.bound = 'true';
+        }
+    }
+
+    getSelectedMappingRuleSet() {
+        return this.mappingRuleSets.find((ruleSet) => Number(ruleSet.id) === Number(this.selectedMappingRuleSetId)) || null;
+    }
+
+    async persistSelectedMappingRuleSet() {
+        if (!this.selectedMappingRuleSetId) {
+            return;
+        }
+        try {
+            await ApiClient.mappingRules.update(this.selectedMappingRuleSetId, { is_default: true });
+            this.mappingRuleSets = this.mappingRuleSets.map((ruleSet) => ({
+                ...ruleSet,
+                is_default: Number(ruleSet.id) === Number(this.selectedMappingRuleSetId)
+            }));
+        } catch (error) {
+            debug.error('Failed to persist selected mapping rule set:', error);
+        }
+    }
+
+    normalizeMappingText(value) {
+        return String(value || '')
+            .toLowerCase()
+            .replace(/[^\w\s*|]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    applyMappingRulesToCsv(csvData) {
+        const selectedRuleSet = this.getSelectedMappingRuleSet();
+        if (!selectedRuleSet || !csvData) {
+            return { csvData, matchedRows: 0, totalRows: 0 };
+        }
+
+        const rows = this.parseCsvRows(csvData);
+        if (!rows.length) {
+            return { csvData, matchedRows: 0, totalRows: 0 };
+        }
+
+        const headers = rows[0];
+        const dataRows = rows.slice(1);
+        const descriptionIndex = headers.findIndex((header) => String(header).trim().toLowerCase() === 'description');
+        const categoryIndex = headers.findIndex((header) => String(header).trim().toLowerCase() === 'category');
+        if (descriptionIndex === -1 || categoryIndex === -1) {
+            return { csvData, matchedRows: 0, totalRows: dataRows.length };
+        }
+
+        let matchedRows = 0;
+        const updatedRows = dataRows.map((row) => {
+            const nextRow = row.slice();
+            while (nextRow.length < headers.length) {
+                nextRow.push('');
+            }
+            const description = this.normalizeMappingText(nextRow[descriptionIndex]);
+            if (!description) {
+                return nextRow;
+            }
+            const existingCategory = String(nextRow[categoryIndex] || '').trim().toLowerCase();
+            const shouldReplace = !existingCategory || existingCategory === 'misc' || existingCategory === 'uncategorized';
+            if (!shouldReplace) {
+                return nextRow;
+            }
+
+            for (const entry of (selectedRuleSet.entries || [])) {
+                const tokens = String(entry.pattern || '')
+                    .split('|')
+                    .map((part) => this.normalizeMappingText(part))
+                    .filter(Boolean);
+                if (tokens.some((token) => description.includes(token))) {
+                    nextRow[categoryIndex] = entry.category;
+                    matchedRows += 1;
+                    break;
+                }
+            }
+            return nextRow;
+        });
+
+        return {
+            csvData: this.buildCsvFromRows([headers, ...updatedRows]),
+            matchedRows,
+            totalRows: dataRows.length,
+        };
+    }
+
+    buildCsvFromRows(rows) {
+        return rows.map((row) => row.map((cell) => {
+            const value = String(cell ?? '');
+            if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+                return `"${value.replace(/"/g, '""')}"`;
+            }
+            return value;
+        }).join(',')).join('\n');
+    }
+
+    async applySelectedMappingRulesToCurrentCsv(showToast = false) {
+        if (!this.currentCsvData) {
+            return;
+        }
+        const result = this.applyMappingRulesToCsv(this.currentCsvData);
+        this.currentCsvData = result.csvData;
+        this.showCsvPreview(this.currentCsvData);
+        const status = document.getElementById('mappingRuleStatus');
+        if (status) {
+            status.textContent = `Applied ${result.matchedRows} mapping rule matches across ${result.totalRows} imported rows.`;
+        }
+        if (showToast) {
+            Utils.showNotification(`Applied mapping rules to ${result.matchedRows} row(s).`, 'success');
+        }
     }
 
     setupPdfProcessing() {
@@ -236,12 +418,6 @@ class DashboardManager {
             processingArea.classList.add('d-none');
         }
         
-        // Hide any editable CSV section that might be showing
-        const editableCsvSection = document.getElementById('editableCsvSection');
-        if (editableCsvSection) {
-            editableCsvSection.classList.add('d-none');
-        }
-        
         // Show all option cards again
         const optionCards = document.querySelectorAll('.option-card');
         optionCards.forEach(card => {
@@ -275,7 +451,6 @@ class DashboardManager {
         const sheetsPasteText = document.getElementById('sheetsPasteText');
         const csvPreviewArea = document.getElementById('csvPreviewArea');
         const previewTable = document.getElementById('csvPreviewTable');
-        const editableSection = document.getElementById('editableCsvSection');
         const saveCsvBtn = document.getElementById('saveCsv');
 
         if (sheetsPasteArea) sheetsPasteArea.classList.add('d-none');
@@ -284,10 +459,7 @@ class DashboardManager {
         if (aiUploadArea) aiUploadArea.classList.add('d-none');
         if (csvPreviewArea) csvPreviewArea.classList.add('d-none');
         if (previewTable) previewTable.innerHTML = '';
-        if (editableSection) editableSection.classList.add('d-none');
         if (saveCsvBtn) saveCsvBtn.disabled = true;
-
-        this.editableCsvTable = null;
         this.currentSource = null;
     }
     
@@ -340,12 +512,13 @@ class DashboardManager {
         try {
             const csvText = await this.readFileAsText(file);
             this.currentCsvData = csvText;
+            await this.applySelectedMappingRulesToCurrentCsv();
             
             // Add CSV data to chat context
             this.addAiChatMessage('assistant', `I've loaded your CSV file. You can now import it directly, edit it manually, or ask the assistant to process it. For example: "Filter only transactions above $50", "Categorize expenses", or "Remove duplicate entries".`);
             
             // Show CSV preview
-            this.showCsvPreview(csvText);
+            this.showCsvPreview(this.currentCsvData);
             
         } catch (error) {
             debug.error('CSV processing error:', error);
@@ -439,13 +612,14 @@ class DashboardManager {
         const chatMessages = document.getElementById('aiChatMessages');
         if (!chatMessages) return;
         const row = document.createElement('div');
-        row.className = `d-flex mb-2 ${role === 'user' ? 'justify-content-end' : 'justify-content-start'}`;
+        row.className = `ingress-chat-row ${role === 'user' ? 'is-user' : 'is-assistant'}`;
         const bubble = document.createElement('div');
-        bubble.className = `d-inline-flex align-items-start gap-2 ${role === 'user' ? 'bg-primary text-white' : 'bg-light border'} rounded-pill py-1 px-3`;
+        bubble.className = `ingress-chat-bubble ${role === 'user' ? 'is-user' : 'is-assistant'}`;
         const badge = document.createElement('span');
-        badge.className = `badge ${role === 'user' ? 'bg-light text-primary' : 'bg-secondary'}`;
+        badge.className = 'ingress-chat-badge';
         badge.textContent = role === 'user' ? 'You' : 'AI';
-        const text = document.createElement('span');
+        const text = document.createElement('div');
+        text.className = 'ingress-chat-text';
         text.textContent = content;
         bubble.appendChild(badge);
         bubble.appendChild(text);
@@ -719,12 +893,12 @@ class DashboardManager {
             if (response.processed_csv) {
                 this.currentCsvData = response.processed_csv;
                 this.showCsvPreview(response.processed_csv);
-                this.showEditableCsvTable(response.processed_csv);
             }
             
         } catch (error) {
             debug.error('AI processing error:', error);
-            this.addAiChatMessage('assistant', 'Sorry, I encountered an error processing your request. Please try again.');
+            const message = error?.response?.error || error?.message || 'Sorry, I encountered an error processing your request. Please try again.';
+            this.addAiChatMessage('assistant', message);
         }
     }
 
@@ -907,13 +1081,14 @@ class DashboardManager {
     appendAnalyticsMessage(role, message) {
         if (!this.analyticsLog) return;
         const row = document.createElement('div');
-        row.className = `d-flex mb-2 ${role === 'user' ? 'justify-content-end' : 'justify-content-start'}`;
+        row.className = `ingress-chat-row ${role === 'user' ? 'is-user' : 'is-assistant'}`;
         const bubble = document.createElement('div');
-        bubble.className = `d-inline-flex align-items-start gap-2 ${role === 'user' ? 'bg-primary text-white' : 'bg-light border'} rounded-pill py-1 px-3`;
+        bubble.className = `ingress-chat-bubble ${role === 'user' ? 'is-user' : 'is-assistant'}`;
         const badge = document.createElement('span');
-        badge.className = `badge ${role === 'user' ? 'bg-light text-primary' : 'bg-secondary'}`;
+        badge.className = 'ingress-chat-badge';
         badge.textContent = role === 'user' ? 'You' : 'AI';
-        const text = document.createElement('span');
+        const text = document.createElement('div');
+        text.className = 'ingress-chat-text';
         text.textContent = message;
         bubble.appendChild(badge);
         bubble.appendChild(text);
@@ -1237,9 +1412,10 @@ class DashboardManager {
             const csvData = this.convertSheetsToCsv(pastedData);
             this.currentCsvData = csvData;
             this.currentSource = 'paste';
+            await this.applySelectedMappingRulesToCurrentCsv();
             
             // Show CSV preview
-            this.showCsvPreview(csvData);
+            this.showCsvPreview(this.currentCsvData);
             this.addAiChatMessage('assistant', 'Pasted data loaded. You can import it as-is, edit it directly, or ask the assistant to clean and categorize it.');
             
             Utils.showNotification('Google Sheets data processed successfully', 'success');
@@ -1394,6 +1570,10 @@ class DashboardManager {
             );
     }
 
+    getValidExpenseCategories() {
+        return ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurant', 'service', 'shopping', 'transport', 'utility', 'vacation'];
+    }
+
     showCsvPreview(csvData) {
         const processingArea = document.getElementById('processingArea');
         const csvPreviewArea = document.getElementById('csvPreviewArea');
@@ -1402,249 +1582,78 @@ class DashboardManager {
         processingArea.classList.add('d-none');
         csvPreviewArea.classList.remove('d-none');
         
-        // Parse CSV and create table preview
+        // Parse CSV and create editable table preview
         const rows = this.parseCsvRows(csvData);
+        const categories = this.getValidExpenseCategories();
         let tableHtml = '';
         
         rows.forEach((row, index) => {
-            tableHtml += '<tr>';
-            row.forEach(cell => {
+            tableHtml += index === 0 ? '<tr>' : '<tr data-preview-row="true">';
+            row.forEach((cell, cellIndex) => {
                 if (index === 0) {
                     tableHtml += `<th>${cell}</th>`;
                 } else {
-                    tableHtml += `<td>${cell}</td>`;
+                    if (cellIndex === 3) {
+                        const options = categories.map((category) => (
+                            `<option value="${category}" ${String(cell || '').toLowerCase() === category ? 'selected' : ''}>${category}</option>`
+                        )).join('');
+                        tableHtml += `<td><select class="preview-select" data-col="${cellIndex}">${options}</select></td>`;
+                    } else {
+                        const escaped = Utils.escapeHtml(cell || '');
+                        tableHtml += `<td><input class="preview-input" data-col="${cellIndex}" type="text" value="${escaped}"></td>`;
+                    }
                 }
             });
+            if (index === 0) {
+                tableHtml += '<th>Remove</th>';
+            } else {
+                tableHtml += `<td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger preview-remove-btn" aria-label="Remove row" title="Remove row"><i class="fas fa-trash"></i></button></td>`;
+            }
             tableHtml += '</tr>';
         });
         
         previewTable.innerHTML = tableHtml;
-        
-        // Setup edit button
-        const editBtn = document.getElementById('editCsv');
-        if (editBtn) {
-            editBtn.addEventListener('click', () => {
-                this.showEditableCsvTable(csvData);
+
+        previewTable.querySelectorAll('.preview-input, .preview-select').forEach((element) => {
+            const eventName = element.tagName === 'SELECT' ? 'change' : 'input';
+            element.addEventListener(eventName, () => {
+                this.updateCsvFromPreviewTable();
             });
-        }
+        });
+
+        previewTable.querySelectorAll('.preview-remove-btn').forEach((button) => {
+            button.addEventListener('click', () => {
+                button.closest('tr')?.remove();
+                this.updateCsvFromPreviewTable();
+            });
+        });
 
         // Setup save data button
         const saveBtn = document.getElementById('saveCsv');
         if (saveBtn) {
-            saveBtn.addEventListener('click', async () => {
+            saveBtn.onclick = async () => {
                 const originalText = saveBtn.textContent;
                 saveBtn.disabled = true;
                 saveBtn.textContent = 'Saving...';
                 try {
-                    await this.saveCsvDataDirectly(csvData);
+                    this.updateCsvFromPreviewTable();
+                    await this.saveCsvDataDirectly(this.currentCsvData);
                 } finally {
                     saveBtn.disabled = false;
                     saveBtn.textContent = originalText;
                 }
-            }, { once: true });
-        }
-    }
-
-
-    showEditableCsvTable(csvData) {
-        const editableTableContainer = document.getElementById('editableCsvTable');
-        if (!editableTableContainer) return;
-        
-        // Parse CSV data (handles embedded commas)
-        const rows = this.parseCsvRows(csvData);
-        const headers = rows[0] || [];
-        const dataRows = rows.slice(1).map(row => {
-            const cells = row.slice();
-            while (cells.length < headers.length) {
-                cells.push('');
-            }
-            return cells;
-        });
-        
-        // Create Handsontable for editable CSV
-        if (this.editableCsvTable) {
-            this.editableCsvTable.destroy();
-        }
-        
-        const isTouch = this.isTouchDevice;
-        this.editableCsvTable = new Handsontable(editableTableContainer, {
-            data: dataRows,
-            columns: headers.map((header, index) => ({
-                data: index,
-                type: 'text'
-            })),
-            colHeaders: headers,
-            rowHeaders: true,
-            contextMenu: isTouch ? ['row_above', 'row_below', 'remove_row'] : true,
-            manualColumnResize: !isTouch,
-            manualRowMove: !isTouch,
-            licenseKey: 'non-commercial-and-evaluation',
-            height: isTouch ? 'auto' : 300,
-            stretchH: 'all',
-            preventOverflow: 'horizontal',
-            selectionMode: isTouch ? 'single' : 'range',
-            className: isTouch ? 'htTouchFriendly' : '',
-            rowHeights: isTouch ? 44 : undefined,
-            afterChange: (changes, source) => {
-                if (source === 'edit') {
-                    this.updateCsvFromEditableTable();
-                }
-            }
-        });
-        
-        // Show the editable table section
-        const editableSection = document.getElementById('editableCsvSection');
-        if (editableSection) {
-            editableSection.classList.remove('d-none');
-        }
-        
-        // Setup save and cancel buttons
-        const saveBtn = document.getElementById('saveExpenses');
-        const cancelBtn = document.getElementById('cancelEdit');
-        
-        if (saveBtn) {
-            saveBtn.addEventListener('click', this.saveExpensesToDb.bind(this));
-        }
-        
-        if (cancelBtn) {
-            cancelBtn.addEventListener('click', this.cancelEdit.bind(this));
-        }
-    }
-    
-    async saveExpensesToDb() {
-        const saveBtn = document.getElementById('saveExpenses');
-        const originalSaveText = saveBtn ? saveBtn.textContent : null;
-        if (saveBtn) {
-            saveBtn.disabled = true;
-            saveBtn.textContent = 'Saving...';
-        }
-
-        if (!this.editableCsvTable) {
-            Utils.showNotification('No data to save', 'warning');
-            if (saveBtn) {
-                saveBtn.disabled = false;
-                saveBtn.textContent = originalSaveText;
-            }
-            return;
-        }
-        
-        const data = this.editableCsvTable.getData();
-        const headers = this.editableCsvTable.getColHeader();
-        
-        try {
-            // Define valid categories
-            const validCategories = ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurant', 'service', 'shopping', 'transport', 'utility', 'vacation'];
-            
-            // Convert table data to expense objects
-            const expenses = [];
-            const invalidCategories = [];
-            
-            data.forEach((row, index) => {
-                if (row.length >= 4) {
-                    // Parse date from MM/DD/YYYY format to YYYY-MM-DD format
-                    let date = row[0];
-                    if (date && date.includes('/')) {
-                        const parts = date.split('/');
-                        if (parts.length === 3) {
-                            const month = parts[0].padStart(2, '0');
-                            const day = parts[1].padStart(2, '0');
-                            const year = parts[2].length === 2 ? '20' + parts[2] : parts[2];
-                            date = `${year}-${month}-${day}`;
-                        }
-                    }
-                    
-                    const expense = {
-                        date: date,
-                        description: row[1],
-                        amount: parseFloat(row[2]) || 0,
-                        category: row[3] || 'misc'
-                    };
-                    
-                    // Validate category
-                    if (expense.category && !validCategories.includes(expense.category.toLowerCase())) {
-                        invalidCategories.push({
-                            row: index + 2, // +2 because of header row and 0-based index
-                            category: expense.category,
-                            description: expense.description
-                        });
-                        return; // Skip this expense
-                    }
-                    
-                    // Only add if we have valid data
-                    if (expense.date && expense.description && expense.amount > 0) {
-                        expenses.push(expense);
-                    }
-                }
-            });
-            
-            // Show error if invalid categories found
-            if (invalidCategories.length > 0) {
-                const errorMessage = `Invalid categories found in ${invalidCategories.length} row(s). Please fix these before saving:\n\n` +
-                    invalidCategories.map(item => 
-                        `Row ${item.row}: "${item.category}" (Description: "${item.description}")`
-                    ).join('\n');
-                
-                Utils.showNotification(errorMessage, 'danger', 10000); // Show for 10 seconds
-                return;
-            }
-            
-            if (expenses.length === 0) {
-                Utils.showNotification('No valid expenses to save', 'warning');
-                return;
-            }
-            
-            // Save each expense to the database
-            let savedCount = 0;
-            for (const expense of expenses) {
-                try {
-                    debug.log('Attempting to save expense:', expense);
-                    const result = await ApiClient.expenses.create(this.dashboardId, expense);
-                    debug.log('Save result:', result);
-                    savedCount++;
-                } catch (error) {
-                    debug.error('Error saving expense:', error);
-                    debug.error('Error details:', error.message);
-                }
-            }
-            
-            debug.log(`Total expenses saved: ${savedCount}`);
-            Utils.showNotification(`Successfully saved ${savedCount} expenses to the database`, 'success');
-            
-            // Hide the editable section
-            const editableSection = document.getElementById('editableCsvSection');
-            if (editableSection) {
-                editableSection.classList.add('d-none');
-            }
-
-            // Full reset of Sheets upload UI
-            this.resetSheetsUI();
-            
-            // Cleanup temporary AI data once saved
-            this.cleanupAiState();
-            
-        } catch (error) {
-            debug.error('Error saving expenses:', error);
-            Utils.showNotification('Error saving expenses to database', 'danger');
-        } finally {
-            if (saveBtn) {
-                saveBtn.disabled = false;
-                saveBtn.textContent = originalSaveText;
-            }
+            };
         }
     }
     
     async saveCsvDataDirectly(csvData) {
         try {
-            // Define valid categories
-            const validCategories = ['car', 'gas', 'grocery', 'home exp', 'home setup', 'gym', 'hospital', 'misc', 'rent', 'mortgage', 'restaurant', 'service', 'shopping', 'transport', 'utility', 'vacation'];
+            const validCategories = this.getValidExpenseCategories();
             
             // Parse CSV data directly
-            const rows = csvData.split('\n');
-            const headers = rows[0].split(',').map(h => h.replace(/^"|"$/g, ''));
-            const dataRows = rows.slice(1).map(row => {
-                const cells = row.split(',').map(cell => cell.replace(/^"|"$/g, ''));
-                return cells;
-            });
+            const rows = this.parseCsvRows(csvData);
+            const headers = rows[0] || [];
+            const dataRows = rows.slice(1);
             
             // Convert to expense objects
             const expenses = [];
@@ -1765,34 +1774,31 @@ class DashboardManager {
             Utils.showNotification('Error refreshing dashboard components', 'danger');
         }
     }
-    
-    cancelEdit() {
-        const editableSection = document.getElementById('editableCsvSection');
-        if (editableSection) {
-            editableSection.classList.add('d-none');
-        }
-        Utils.showNotification('Editing cancelled', 'info');
-    }
 
-    updateCsvFromEditableTable() {
-        if (!this.editableCsvTable) return;
-        
-        const data = this.editableCsvTable.getData();
-        const headers = this.editableCsvTable.getColHeader();
-        
-        // Convert back to CSV format
-        const csvRows = [headers.join(',')];
-        data.forEach(row => {
-            const escapedRow = row.map(cell => `"${cell}"`);
-            csvRows.push(escapedRow.join(','));
+    updateCsvFromPreviewTable() {
+        const previewTable = document.getElementById('csvPreviewTable');
+        if (!previewTable) return;
+
+        const rows = [];
+        const headerCells = Array.from(previewTable.querySelectorAll('tr:first-child th'))
+            .slice(0, 4)
+            .map((cell) => cell.textContent.trim());
+        if (!headerCells.length) {
+            return;
+        }
+        rows.push(headerCells);
+
+        previewTable.querySelectorAll('tr[data-preview-row="true"]').forEach((row) => {
+            const cells = [];
+            row.querySelectorAll('[data-col]').forEach((input) => {
+                cells.push(input.value ?? '');
+            });
+            if (cells.some((value) => String(value).trim() !== '')) {
+                rows.push(cells);
+            }
         });
-        
-        this.currentCsvData = csvRows.join('\n');
-        
-        // Update the preview as well
-        this.showCsvPreview(this.currentCsvData);
-        
-        Utils.showNotification('CSV data updated. Your changes will be used in the next AI request.', 'info');
+
+        this.currentCsvData = this.buildCsvFromRows(rows);
     }
 
 

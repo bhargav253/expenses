@@ -2013,6 +2013,50 @@ AI_MODELS = {
     }
 }
 
+
+def extract_provider_error_message(response):
+    """Return the clearest available provider error message."""
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        error = payload.get('error')
+        if isinstance(error, dict):
+            return error.get('message') or error.get('type') or json.dumps(error)
+        if isinstance(error, str):
+            return error
+        message = payload.get('message')
+        if isinstance(message, str) and message.strip():
+            return message
+
+    text = response.text.strip()
+    if text:
+        return text[:500]
+    return f"HTTP {response.status_code}"
+
+
+def extract_chat_completion_content(result):
+    """Normalize OpenAI-compatible chat completion content into a plain string."""
+    choices = result.get('choices') or []
+    if not choices:
+        raise ValueError("AI provider returned no choices")
+
+    message = choices[0].get('message') or {}
+    content = message.get('content')
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get('type') == 'text':
+                parts.append(item.get('text', ''))
+        combined = ''.join(parts).strip()
+        if combined:
+            return combined
+    raise ValueError("AI provider returned an unexpected response format")
+
 # Database configuration
 # Prefer DATABASE_URL / SQLALCHEMY_DATABASE_URI env vars; default to local SQLite
 database_url = os.environ.get('DATABASE_URL') or os.environ.get('SQLALCHEMY_DATABASE_URI')
@@ -2048,7 +2092,7 @@ google = oauth.register(
 )
 
 # Import models
-from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, TradeAgentRun, TrendScanRun, TrendScanEvent, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar
+from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, TradeAgentRun, TrendScanRun, TrendScanEvent, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar, MappingRuleSet, MappingRuleEntry
 
 
 def ensure_schema_compatibility():
@@ -2132,6 +2176,86 @@ def ensure_schema_compatibility():
     ensure_columns('trend_scan_run', [
         ('source_statuses_json', 'TEXT'),
     ])
+
+
+def load_default_mapping_entries():
+    """Load seed mapping rules from the checked-in default mapping file."""
+    mapping_path = Path(app.root_path) / 'data' / 'default_mapping.txt'
+    entries = []
+    if not mapping_path.exists():
+        return entries
+
+    with mapping_path.open('r', encoding='utf-8') as handle:
+        for index, raw_line in enumerate(handle):
+            line = raw_line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = [part.strip() for part in line.split(',', 1)]
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                logger.warning("Skipping invalid default mapping line %s: %s", index + 1, raw_line.rstrip())
+                continue
+            entries.append({
+                'pattern': parts[0],
+                'category': parts[1].lower(),
+                'position': len(entries),
+            })
+    return entries
+
+
+def serialize_mapping_rule_set(rule_set):
+    return {
+        'id': rule_set.id,
+        'name': rule_set.name,
+        'is_default': bool(rule_set.is_default),
+        'entries': [
+            {
+                'id': entry.id,
+                'pattern': entry.pattern,
+                'category': entry.category,
+                'position': entry.position,
+            }
+            for entry in sorted(rule_set.entries, key=lambda item: item.position)
+        ],
+    }
+
+
+def set_default_mapping_rule_set(user_id, rule_set_id):
+    MappingRuleSet.query.filter_by(user_id=user_id, is_default=True).update(
+        {'is_default': False},
+        synchronize_session=False,
+    )
+    target = MappingRuleSet.query.filter_by(id=rule_set_id, user_id=user_id).first()
+    if target:
+        target.is_default = True
+    return target
+
+
+def ensure_user_mapping_rule_sets(user):
+    existing_sets = MappingRuleSet.query.filter_by(user_id=user.id).order_by(MappingRuleSet.created_at.asc()).all()
+    if existing_sets:
+        if not any(rule_set.is_default for rule_set in existing_sets):
+            existing_sets[0].is_default = True
+            db.session.commit()
+        return existing_sets
+
+    default_entries = load_default_mapping_entries()
+    default_rule_set = MappingRuleSet(
+        user_id=user.id,
+        name='Default Mapping',
+        is_default=True,
+    )
+    db.session.add(default_rule_set)
+    db.session.flush()
+
+    for entry in default_entries:
+        db.session.add(MappingRuleEntry(
+            rule_set_id=default_rule_set.id,
+            pattern=entry['pattern'],
+            category=entry['category'],
+            position=entry['position'],
+        ))
+    db.session.commit()
+    return [default_rule_set]
 
 
 # Initialize database tables
@@ -2323,43 +2447,200 @@ def settings():
     next_url = request.args.get('next', '').strip()
     if not next_url.startswith('/'):
         next_url = url_for('index')
-    return render_template('settings.html', user=user, back_url=next_url)
+    return render_template('settings.html', user=user, back_url=next_url, EXPENSE_CATEGORIES=EXPENSE_CATEGORIES)
+
+
+@app.route('/api/settings/mapping-rules', methods=['GET'])
+def get_mapping_rules():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    user = User.query.get(session['user_id'])
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    rule_sets = ensure_user_mapping_rule_sets(user)
+    return jsonify({
+        'rule_sets': [serialize_mapping_rule_set(rule_set) for rule_set in rule_sets],
+    })
+
+
+@app.route('/api/settings/mapping-rules', methods=['POST'])
+def create_mapping_rule_set():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    user = User.query.get(session['user_id'])
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    ensure_user_mapping_rule_sets(user)
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'Rule set name is required'}), 400
+
+    source_rule_set_id = data.get('source_rule_set_id')
+    requested_entries = data.get('entries')
+    cloned_entries = []
+
+    if source_rule_set_id:
+        source_rule_set = MappingRuleSet.query.filter_by(id=source_rule_set_id, user_id=user.id).first()
+        if not source_rule_set:
+            return jsonify({'error': 'Source mapping rule set not found'}), 404
+        cloned_entries = [
+            {
+                'pattern': entry.pattern,
+                'category': entry.category,
+                'position': index,
+            }
+            for index, entry in enumerate(sorted(source_rule_set.entries, key=lambda item: item.position))
+        ]
+
+    entries = requested_entries if isinstance(requested_entries, list) else cloned_entries
+    normalized_entries = []
+    for index, entry in enumerate(entries):
+        pattern = (entry.get('pattern') or '').strip()
+        category = (entry.get('category') or '').strip().lower()
+        if not pattern or not category:
+            continue
+        if category not in EXPENSE_CATEGORIES:
+            return jsonify({'error': f'Invalid category in mapping rules: {category}'}), 400
+        normalized_entries.append({
+            'pattern': pattern,
+            'category': category,
+            'position': index,
+        })
+
+    rule_set = MappingRuleSet(user_id=user.id, name=name, is_default=bool(data.get('is_default')))
+    db.session.add(rule_set)
+    db.session.flush()
+    for entry in normalized_entries:
+        db.session.add(MappingRuleEntry(rule_set_id=rule_set.id, **entry))
+
+    if rule_set.is_default:
+        set_default_mapping_rule_set(user.id, rule_set.id)
+
+    db.session.commit()
+    return jsonify({'rule_set': serialize_mapping_rule_set(rule_set)}), 201
+
+
+@app.route('/api/settings/mapping-rules/<int:rule_set_id>', methods=['PUT'])
+def update_mapping_rule_set(rule_set_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    user = User.query.get(session['user_id'])
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    rule_set = MappingRuleSet.query.filter_by(id=rule_set_id, user_id=user.id).first()
+    if not rule_set:
+        return jsonify({'error': 'Mapping rule set not found'}), 404
+
+    data = request.get_json() or {}
+    name = data.get('name')
+    if isinstance(name, str) and name.strip():
+        rule_set.name = name.strip()
+
+    if 'is_default' in data and data.get('is_default'):
+        set_default_mapping_rule_set(user.id, rule_set.id)
+
+    if 'entries' in data:
+        entries = data.get('entries') or []
+        normalized_entries = []
+        for index, entry in enumerate(entries):
+            pattern = (entry.get('pattern') or '').strip()
+            category = (entry.get('category') or '').strip().lower()
+            if not pattern or not category:
+                continue
+            if category not in EXPENSE_CATEGORIES:
+                return jsonify({'error': f'Invalid category in mapping rules: {category}'}), 400
+            normalized_entries.append({
+                'pattern': pattern,
+                'category': category,
+                'position': index,
+            })
+        MappingRuleEntry.query.filter_by(rule_set_id=rule_set.id).delete()
+        for entry in normalized_entries:
+            db.session.add(MappingRuleEntry(rule_set_id=rule_set.id, **entry))
+
+    db.session.commit()
+    db.session.refresh(rule_set)
+    return jsonify({'rule_set': serialize_mapping_rule_set(rule_set)})
+
+
+@app.route('/api/settings/mapping-rules/<int:rule_set_id>', methods=['DELETE'])
+def delete_mapping_rule_set(rule_set_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    user = User.query.get(session['user_id'])
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    rule_set = MappingRuleSet.query.filter_by(id=rule_set_id, user_id=user.id).first()
+    if not rule_set:
+        return jsonify({'error': 'Mapping rule set not found'}), 404
+    if rule_set.is_default:
+        return jsonify({'error': 'Default mapping rule set cannot be deleted'}), 400
+
+    db.session.delete(rule_set)
+    db.session.commit()
+
+    remaining_sets = ensure_user_mapping_rule_sets(user)
+    return jsonify({
+        'message': 'Mapping rule set deleted successfully',
+        'rule_sets': [serialize_mapping_rule_set(item) for item in remaining_sets],
+    })
+
 
 @app.route('/api/settings/update-ai-settings', methods=['POST'])
 def update_ai_settings():
     if 'user_id' not in session:
         return jsonify({'error': 'Not authenticated'}), 401
     
-    data = request.get_json()
+    data = request.get_json() or {}
     user = User.query.get(session['user_id'])
-    
-    # Update default AI provider
-    if 'default_ai_provider' in data:
-        user.default_ai_provider = data['default_ai_provider']
-    
-    # Update API keys
-    if 'mistral_api_key' in data:
-        user.set_encrypted_api_key('mistral_api_key', data['mistral_api_key'])
-    if 'openai_api_key' in data:
-        user.set_encrypted_api_key('openai_api_key', data['openai_api_key'])
-    if 'anthropic_api_key' in data:
-        user.set_encrypted_api_key('anthropic_api_key', data['anthropic_api_key'])
-    if 'deepseek_api_key' in data:
-        user.set_encrypted_api_key('deepseek_api_key', data['deepseek_api_key'])
-    if 'newsapi_api_key' in data:
-        user.set_encrypted_api_key('newsapi_api_key', data['newsapi_api_key'])
-    if 'newsapi_daily_limit' in data:
-        try:
-            limit_value = int(data['newsapi_daily_limit'])
-        except (TypeError, ValueError):
-            return jsonify({'error': 'NewsAPI daily limit must be a whole number'}), 400
-        if limit_value < 0 or limit_value > 100:
-            return jsonify({'error': 'NewsAPI daily limit must be between 0 and 100'}), 400
-        user.newsapi_daily_limit = limit_value
-    
-    db.session.commit()
-    
-    return jsonify({'message': 'AI settings updated successfully'})
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    try:
+        provider = data.get('default_ai_provider')
+        if provider:
+            supported_providers = set(AI_MODELS.keys())
+            supported_providers.add('anthropic')
+            if provider not in supported_providers:
+                return jsonify({'error': 'Unsupported AI provider selected'}), 400
+            user.default_ai_provider = provider
+
+        # Only overwrite keys when the user explicitly entered a new non-empty value.
+        for field_name in (
+            'mistral_api_key',
+            'openai_api_key',
+            'anthropic_api_key',
+            'deepseek_api_key',
+            'newsapi_api_key',
+        ):
+            value = data.get(field_name)
+            if isinstance(value, str) and value.strip():
+                user.set_encrypted_api_key(field_name, value.strip())
+
+        if 'newsapi_daily_limit' in data:
+            try:
+                limit_value = int(data['newsapi_daily_limit'])
+            except (TypeError, ValueError):
+                return jsonify({'error': 'NewsAPI daily limit must be a whole number'}), 400
+            if limit_value < 0 or limit_value > 100:
+                return jsonify({'error': 'NewsAPI daily limit must be between 0 and 100'}), 400
+            user.newsapi_daily_limit = limit_value
+
+        db.session.commit()
+        return jsonify({'message': 'AI settings updated successfully'})
+    except Exception as exc:
+        db.session.rollback()
+        logger.error(f"Failed to update AI settings: {exc}")
+        return jsonify({'error': f'Failed to update AI settings: {exc}'}), 500
 
 @app.route('/api/dashboard/create', methods=['POST'])
 def create_dashboard():
@@ -3547,13 +3828,14 @@ def process_csv_with_ai(dashboard_id):
                 conversation_history=encrypt_str('[]')
             )
             db.session.add(chat_session)
-        
+
         # Get conversation history
         conversation_history = chat_session.get_conversation_history()
-        
+        effective_csv_data = csv_data or chat_session.get_csv_data() or ""
+
         # Add user message to conversation
-        chat_session.add_message('user', prompt, csv_data)
-        
+        chat_session.add_message('user', prompt, effective_csv_data)
+
         # Process with AI
         processed_csv, ai_response = call_aimodel_with_context_and_csv(
             user, 
@@ -3561,7 +3843,7 @@ def process_csv_with_ai(dashboard_id):
             "csv_data.csv", 
             prompt, 
             conversation_history,
-            csv_data
+            effective_csv_data
         )
         
         # Update session with new CSV data and AI response
@@ -4139,7 +4421,7 @@ def call_aimodel_excel_api(user, excel_data, filename, prompt=""):
 def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, conversation_history, current_csv_data):
     """Call AI model API with conversation context and current CSV data for processing"""
     # Get user's selected AI model
-    model_key = user.default_ai_provider or 'deepseek'
+    model_key = user.default_ai_provider or 'mistral'
     model_config = AI_MODELS.get(model_key)
     
     if not model_config:
@@ -4254,15 +4536,16 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         logger.debug(f"API response status: {response.status_code}")
         
         if response.status_code != 200:
-            logger.error(f"API error response: {response.text}")
-            response.raise_for_status()
+            error_message = extract_provider_error_message(response)
+            logger.error(f"{model_config['name']} API error response: {error_message}")
+            raise ValueError(f"{model_config['name']} request failed: {error_message}")
         
         result = response.json()
-        ai_response = result['choices'][0]['message']['content']
+        ai_response = extract_chat_completion_content(result)
         logger.debug(f"API response received: {len(ai_response)} characters")
         
         # Extract CSV from response - improved logic to separate explanation from CSV
-        lines = ai_response.split('\n')
+        lines = [line for line in ai_response.replace('```csv', '```').split('\n') if line.strip() != '```']
         csv_lines = []
         explanation_lines = []
         in_csv_section = False
@@ -4314,11 +4597,14 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         
         # If still no CSV found, return a default structure
         if not csv_lines:
-            logger.warning("No CSV found in AI response, using default structure")
-            csv_lines = [
-                "Date,Description,Amount,Category",
-                "2025-10-01,Sample Transaction,100.00,misc"
-            ]
+            logger.warning("No CSV found in AI response, preserving current CSV data")
+            if current_csv_data and current_csv_data.strip():
+                explanation = '\n'.join(explanation_lines).strip() or (
+                    "I understood the request, but the AI response did not include valid CSV output. "
+                    "Your current CSV data has been preserved."
+                )
+                return current_csv_data, explanation
+            raise ValueError("AI response did not include valid CSV output")
         
         # Clean up CSV data - remove any explanation text that might have been included
         clean_csv_lines = []
@@ -4338,16 +4624,15 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         
         return csv_data, explanation
         
+    except requests.exceptions.Timeout as e:
+        logger.error(f"{model_config['name']} API request timed out: {str(e)}")
+        raise ValueError(f"{model_config['name']} request timed out. Please try a smaller CSV or retry.")
     except requests.exceptions.RequestException as e:
-        logger.error(f"API request failed: {str(e)}")
-        # Fallback for API errors
-        fallback_csv = "Date,Description,Amount,Category\n2025-10-01,API Error - Please try again,0.00,misc"
-        return fallback_csv, "AI processing failed. Please try again."
+        logger.error(f"{model_config['name']} API request failed: {str(e)}")
+        raise ValueError(f"{model_config['name']} request failed. Please verify your API key and network access.")
     except Exception as e:
         logger.error(f"API processing failed: {str(e)}")
-        # Fallback for other errors
-        fallback_csv = "Date,Description,Amount,Category\n2025-10-01,Processing Error - Please try again,0.00,misc"
-        return fallback_csv, "AI processing failed. Please try again."
+        raise
 
 
 
