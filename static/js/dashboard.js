@@ -15,6 +15,8 @@ class DashboardManager {
         this.monthlyToastShown = false;
         this.securityToastShown = false;
         this.analyticsSessionId = null;
+        this.aiProgressPollTimer = null;
+        this.aiProgressHideTimer = null;
         this.init();
     }
 
@@ -634,6 +636,123 @@ class DashboardManager {
             chatMessages.innerHTML = '';
         }
     }
+
+    renderAiBatchStatus(progress) {
+        const container = document.getElementById('aiBatchStatus');
+        const summary = document.getElementById('aiBatchStatusSummary');
+        const meta = document.getElementById('aiBatchStatusMeta');
+        if (!container || !summary || !meta) return;
+
+        if (!progress || progress.status === 'idle') {
+            container.classList.add('d-none');
+            summary.textContent = '';
+            meta.textContent = '';
+            return;
+        }
+
+        container.classList.remove('d-none');
+        const status = progress.status || 'running';
+        const totalBatches = Number(progress.total_batches || 0);
+        const completedBatches = Number(progress.completed_batches || 0);
+        const pendingBatches = Number(progress.pending_batches || 0);
+        const currentBatch = Number(progress.current_batch || 0);
+        const batchSize = Number(progress.batch_size || 0);
+        const totalRows = Number(progress.total_rows || 0);
+        const rowsProcessed = Number(progress.rows_processed || 0);
+        const rowsRemaining = Number(progress.rows_remaining || 0);
+        const isBatched = Boolean(progress.is_batched);
+
+        if (status === 'queued') {
+            summary.textContent = isBatched
+                ? `Queued ${totalRows} rows across ${totalBatches} batches.`
+                : `Queued ${totalRows} rows for AI processing.`;
+        } else if (status === 'running') {
+            summary.textContent = isBatched
+                ? `Running batch ${Math.max(1, currentBatch)} of ${totalBatches}.`
+                : `Processing ${totalRows} rows.`;
+        } else if (status === 'completed') {
+            const outputRows = Number(progress.output_rows || totalRows);
+            const removedRows = Number(progress.rows_removed || 0);
+            summary.textContent = removedRows > 0
+                ? `Completed. ${outputRows} rows kept, ${removedRows} removed.`
+                : `Completed. ${outputRows} rows returned.`;
+        } else if (status === 'error') {
+            summary.textContent = progress.error || 'Batch processing failed.';
+        }
+
+        const metaParts = [];
+        if (isBatched) {
+            metaParts.push(`${completedBatches}/${totalBatches} done`);
+            metaParts.push(`${pendingBatches} pending`);
+            if (batchSize) {
+                metaParts.push(`${batchSize} rows/batch`);
+            }
+        }
+        if (totalRows) {
+            metaParts.push(`${rowsProcessed}/${totalRows} rows processed`);
+            metaParts.push(`${rowsRemaining} remaining`);
+        }
+        if (progress.filter_request) {
+            metaParts.push('filter mode');
+        }
+        meta.textContent = metaParts.join(' • ');
+    }
+
+    stopAiProgressPolling() {
+        if (this.aiProgressPollTimer) {
+            clearInterval(this.aiProgressPollTimer);
+            this.aiProgressPollTimer = null;
+        }
+    }
+
+    scheduleAiBatchStatusHide() {
+        if (this.aiProgressHideTimer) {
+            clearTimeout(this.aiProgressHideTimer);
+        }
+        this.aiProgressHideTimer = setTimeout(() => {
+            this.renderAiBatchStatus(null);
+            this.aiProgressHideTimer = null;
+        }, 1600);
+    }
+
+    async pollAiProgress(sessionId) {
+        if (!sessionId) return;
+        try {
+            const progress = await ApiClient.ai.getProgress(this.dashboardId, sessionId);
+            this.renderAiBatchStatus(progress);
+            if (progress.status === 'completed' || progress.status === 'error') {
+                this.stopAiProgressPolling();
+                if (progress.status === 'completed') {
+                    this.scheduleAiBatchStatusHide();
+                }
+            }
+        } catch (error) {
+            debug.warn('Failed to fetch AI batch progress:', error);
+        }
+    }
+
+    startAiProgressPolling(sessionId) {
+        this.stopAiProgressPolling();
+        if (this.aiProgressHideTimer) {
+            clearTimeout(this.aiProgressHideTimer);
+            this.aiProgressHideTimer = null;
+        }
+        this.renderAiBatchStatus({
+            status: 'queued',
+            total_batches: 0,
+            completed_batches: 0,
+            pending_batches: 0,
+            current_batch: 0,
+            batch_size: 0,
+            total_rows: 0,
+            rows_processed: 0,
+            rows_remaining: 0
+        });
+        this.pollAiProgress(sessionId);
+        this.aiProgressPollTimer = setInterval(() => {
+            this.pollAiProgress(sessionId);
+        }, 1200);
+    }
     
     async sendAiChatMessage() {
         const aiChatInput = document.getElementById('aiChatInput');
@@ -877,6 +996,8 @@ class DashboardManager {
                 const response = await ApiClient.ai.createSession(this.dashboardId, this.currentCsvData);
                 this.currentSessionId = response.session_id;
             }
+
+            this.startAiProgressPolling(this.currentSessionId);
             
             // Send to AI API with current CSV data
             const response = await ApiClient.ai.processCsv(
@@ -894,11 +1015,18 @@ class DashboardManager {
                 this.currentCsvData = response.processed_csv;
                 this.showCsvPreview(response.processed_csv);
             }
+            await this.pollAiProgress(this.currentSessionId);
             
         } catch (error) {
             debug.error('AI processing error:', error);
             const message = error?.response?.error || error?.message || 'Sorry, I encountered an error processing your request. Please try again.';
             this.addAiChatMessage('assistant', message);
+            this.renderAiBatchStatus({
+                status: 'error',
+                error: message
+            });
+        } finally {
+            this.stopAiProgressPolling();
         }
     }
 
@@ -1594,10 +1722,12 @@ class DashboardManager {
                     tableHtml += `<th>${cell}</th>`;
                 } else {
                     if (cellIndex === 3) {
+                        const normalizedValue = String(cell || '').toLowerCase();
+                        const hasValidCategory = categories.includes(normalizedValue);
                         const options = categories.map((category) => (
-                            `<option value="${category}" ${String(cell || '').toLowerCase() === category ? 'selected' : ''}>${category}</option>`
+                            `<option value="${category}" ${normalizedValue === category ? 'selected' : ''}>${category}</option>`
                         )).join('');
-                        tableHtml += `<td><select class="preview-select" data-col="${cellIndex}">${options}</select></td>`;
+                        tableHtml += `<td><select class="preview-select" data-col="${cellIndex}"><option value="" ${hasValidCategory ? '' : 'selected'}>Select...</option>${options}</select></td>`;
                     } else {
                         const escaped = Utils.escapeHtml(cell || '');
                         tableHtml += `<td><input class="preview-input" data-col="${cellIndex}" type="text" value="${escaped}"></td>`;

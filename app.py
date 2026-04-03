@@ -9,6 +9,7 @@ from flask_wtf.csrf import CSRFError, generate_csrf
 import os
 from datetime import datetime, timedelta
 import json
+import csv
 from pathlib import Path
 import threading
 import requests
@@ -20,6 +21,7 @@ import magic
 import re
 import json
 import html
+from io import StringIO
 from logging.handlers import RotatingFileHandler
 from security_utils import decrypt_str, encrypt_str, encryption_enabled
 from dotenv import load_dotenv
@@ -118,6 +120,10 @@ else:
     })
 
 talisman = Talisman(app, **talisman_config)
+
+
+CSV_AI_PROGRESS = {}
+CSV_AI_PROGRESS_LOCK = threading.Lock()
 
 # Structured Logging Setup
 # ========================
@@ -2057,6 +2063,362 @@ def extract_chat_completion_content(result):
             return combined
     raise ValueError("AI provider returned an unexpected response format")
 
+
+CSV_AI_BATCH_SIZE = max(1, int(os.environ.get('CSV_AI_BATCH_SIZE', '40')))
+CSV_AI_ENFORCE_THRESHOLD = max(1, int(os.environ.get('CSV_AI_ENFORCE_THRESHOLD', '75')))
+
+
+def parse_csv_text(csv_data):
+    """Parse CSV text into header and 4-column data rows."""
+    csv_data = (csv_data or '').strip()
+    if not csv_data:
+        return [], []
+
+    reader = csv.reader(StringIO(csv_data))
+    rows = [[(cell or '').strip() for cell in row] for row in reader if any((cell or '').strip() for cell in row)]
+    if not rows:
+        return [], []
+
+    header = rows[0][:4]
+    header += [''] * (4 - len(header))
+
+    data_rows = []
+    for row in rows[1:]:
+        normalized = row[:4]
+        normalized += [''] * (4 - len(normalized))
+        data_rows.append(normalized)
+
+    return header, data_rows
+
+
+def write_csv_text(header, data_rows):
+    output = StringIO()
+    writer = csv.writer(output, lineterminator='\n')
+    if header:
+        writer.writerow(header[:4])
+    for row in data_rows:
+        normalized = list(row[:4])
+        normalized += [''] * (4 - len(normalized))
+        writer.writerow(normalized)
+    return output.getvalue().strip()
+
+
+def split_csv_batches(data_rows, batch_size):
+    return [data_rows[index:index + batch_size] for index in range(0, len(data_rows), batch_size)]
+
+
+def is_row_reducing_csv_request(prompt):
+    text = (prompt or '').strip().lower()
+    if not text:
+        return False
+
+    patterns = [
+        'filter',
+        'remove',
+        'delete',
+        'exclude',
+        'omit',
+        'drop ',
+        'discard',
+        'keep only',
+        'show only',
+        'only show',
+        'only keep',
+        'only include',
+        'limit to',
+        'above ',
+        'below ',
+        'greater than',
+        'less than',
+        'between ',
+        'under ',
+        'over ',
+        'transactions above',
+        'transactions below',
+        'hide ',
+    ]
+    return any(pattern in text for pattern in patterns)
+
+
+def set_csv_ai_progress(session_id, **fields):
+    if not session_id:
+        return
+    with CSV_AI_PROGRESS_LOCK:
+        state = CSV_AI_PROGRESS.get(session_id, {}).copy()
+        state.update(fields)
+        state['updated_at'] = datetime.utcnow().isoformat()
+        CSV_AI_PROGRESS[session_id] = state
+
+
+def clear_csv_ai_progress(session_id):
+    if not session_id:
+        return
+    with CSV_AI_PROGRESS_LOCK:
+        CSV_AI_PROGRESS.pop(session_id, None)
+
+
+def get_csv_ai_progress(session_id):
+    with CSV_AI_PROGRESS_LOCK:
+        return CSV_AI_PROGRESS.get(session_id)
+
+
+def extract_csv_and_explanation_from_ai_response(ai_response, current_csv_data):
+    """Extract CSV payload and explanation text from provider response."""
+    lines = [line for line in ai_response.replace('```csv', '```').split('\n') if line.strip() != '```']
+    csv_lines = []
+    explanation_lines = []
+    in_csv_section = False
+
+    for line in lines:
+        line = line.strip()
+
+        if line.lower().startswith('date,description,amount,category'):
+            in_csv_section = True
+            csv_lines.append(line)
+            continue
+
+        if in_csv_section and ',' in line:
+            has_date = any(pattern in line for pattern in ['202', '2024', '2025', '2026'])
+            has_amount = any(char.isdigit() for char in line) and any(char in line for char in ['.', '$'])
+
+            if has_date or has_amount:
+                csv_lines.append(line)
+            else:
+                explanation_lines.append(line)
+        elif not in_csv_section:
+            explanation_lines.append(line)
+        else:
+            explanation_lines.append(line)
+
+    if not csv_lines:
+        logger.debug("No CSV found with header detection, trying alternative detection")
+        for line in lines:
+            line = line.strip()
+            if ',' in line and len(line.split(',')) >= 3:
+                has_date = any(pattern in line for pattern in ['202', '2024', '2025', '2026', '/', '-'])
+                has_amount = any(char.isdigit() for char in line) and any(char in line for char in ['.', '$'])
+
+                if has_date or has_amount:
+                    csv_lines.append(line)
+                else:
+                    explanation_lines.append(line)
+            else:
+                explanation_lines.append(line)
+
+    if not csv_lines:
+        logger.warning("No CSV found in AI response, preserving current CSV data")
+        if current_csv_data and current_csv_data.strip():
+            explanation = '\n'.join(explanation_lines).strip() or (
+                "I understood the request, but the AI response did not include valid CSV output. "
+                "Your current CSV data has been preserved."
+            )
+            return current_csv_data, explanation
+        raise ValueError("AI response did not include valid CSV output")
+
+    clean_csv_lines = []
+    for line in csv_lines:
+        if any(keyword in line.lower() for keyword in ['explanation:', 'i removed', 'i filtered', 'i categorized', '**']):
+            explanation_lines.append(line)
+        else:
+            clean_csv_lines.append(line)
+
+    csv_data = '\n'.join(clean_csv_lines)
+    explanation = '\n'.join(explanation_lines).strip()
+    if not explanation:
+        explanation = "I've processed your request. Here's the updated CSV data."
+
+    return csv_data, explanation
+
+
+def call_ai_chat_completion(model_config, model_name, url, headers, messages, conversation_turns, is_initial_extraction):
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": 0.1,
+        "max_tokens": 2000
+    }
+
+    logger.debug(f"Sending request to {model_config['name']} API with {conversation_turns} conversation turns", extra={
+        'is_initial_extraction': is_initial_extraction,
+        'conversation_turns': conversation_turns
+    })
+
+    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    logger.debug(f"API response status: {response.status_code}")
+
+    if response.status_code != 200:
+        error_message = extract_provider_error_message(response)
+        logger.error(f"{model_config['name']} API error response: {error_message}")
+        raise ValueError(f"{model_config['name']} request failed: {error_message}")
+
+    result = response.json()
+    ai_response = extract_chat_completion_content(result)
+    logger.debug(f"API response received: {len(ai_response)} characters")
+    return ai_response
+
+
+def process_csv_with_ai_batches(model_config, model_name, url, headers, prompt, conversation_history, current_csv_data, session_id=None):
+    header, data_rows = parse_csv_text(current_csv_data)
+    if not header:
+        raise ValueError("CSV data is empty or invalid")
+
+    is_filter_request = is_row_reducing_csv_request(prompt)
+    batches = split_csv_batches(data_rows, CSV_AI_BATCH_SIZE)
+    batched_output_rows = []
+    explanation_parts = []
+    total_removed_rows = 0
+    input_rows_processed = 0
+
+    set_csv_ai_progress(
+        session_id,
+        status='running',
+        phase='batching',
+        is_batched=True,
+        batch_size=CSV_AI_BATCH_SIZE,
+        total_batches=len(batches),
+        completed_batches=0,
+        pending_batches=len(batches),
+        current_batch=0,
+        total_rows=len(data_rows),
+        rows_processed=0,
+        rows_remaining=len(data_rows),
+        filter_request=is_filter_request,
+    )
+
+    for batch_index, batch_rows in enumerate(batches, start=1):
+        rows_processed_before = input_rows_processed
+        set_csv_ai_progress(
+            session_id,
+            status='running',
+            phase='processing_batch',
+            current_batch=batch_index,
+            current_batch_rows=len(batch_rows),
+            completed_batches=batch_index - 1,
+            pending_batches=len(batches) - (batch_index - 1),
+            rows_processed=rows_processed_before,
+            rows_remaining=max(0, len(data_rows) - rows_processed_before),
+        )
+        batch_csv = write_csv_text(header, batch_rows)
+        row_expectation = (
+            f"You must return the same header and exactly {len(batch_rows)} data rows. "
+            "Do not drop, add, merge, duplicate, or reorder rows."
+        )
+        if is_filter_request:
+            row_expectation = (
+                f"This is an explicit filter/remove request. You may return fewer than {len(batch_rows)} data rows, "
+                "but you must never invent, split, merge, duplicate, or reorder rows. "
+                "Return only rows from this batch and keep the original header."
+            )
+
+        system_prompt = """You are a CSV data processing assistant. You help users filter, categorize, and transform their expense data.
+
+The user will provide CSV data and a request. You should:
+1. Understand the user's request
+2. Process the CSV data accordingly
+3. Return the processed CSV data
+4. Provide a brief explanation of what you did
+
+Always return valid CSV format with these columns: Date, Description, Amount, Category.
+For categorization, use these categories: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation.
+Do not change the header names.
+"""
+
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt
+            }
+        ]
+
+        for turn in conversation_history[-4:]:
+            messages.append({
+                "role": turn.get('role', 'user'),
+                "content": turn.get('content', '')
+            })
+
+        current_message = (
+            f"CSV Data (batch {batch_index} of {len(batches)}):\n{batch_csv}\n\n"
+            f"User Request: {prompt}\n\n"
+            f"Batch integrity rule: {row_expectation}\n"
+            "Return the processed CSV for this batch followed by a brief explanation."
+        )
+        messages.append({
+            "role": "user",
+            "content": current_message
+        })
+
+        ai_response = call_ai_chat_completion(
+            model_config,
+            model_name,
+            url,
+            headers,
+            messages,
+            len(conversation_history),
+            False
+        )
+        processed_batch_csv, batch_explanation = extract_csv_and_explanation_from_ai_response(ai_response, batch_csv)
+        processed_header, processed_rows = parse_csv_text(processed_batch_csv)
+
+        if [cell.strip().lower() for cell in processed_header[:4]] != [cell.strip().lower() for cell in header[:4]]:
+            raise ValueError(
+                f"AI changed the CSV header on batch {batch_index}. "
+                "Please retry with a simpler request."
+            )
+
+        input_count = len(batch_rows)
+        output_count = len(processed_rows)
+
+        if not is_filter_request and output_count != input_count:
+            raise ValueError(
+                f"AI returned {output_count} rows for batch {batch_index}, but {input_count} were required. "
+                "No data was imported. Try a smaller request or a simpler transform."
+            )
+
+        if is_filter_request and output_count > input_count:
+            raise ValueError(
+                f"AI returned more rows than it received for batch {batch_index}. "
+                "Filtering requests may only keep or remove rows."
+            )
+
+        total_removed_rows += max(0, input_count - output_count)
+        batched_output_rows.extend(processed_rows)
+        input_rows_processed += input_count
+        if batch_explanation:
+            explanation_parts.append(batch_explanation)
+        set_csv_ai_progress(
+            session_id,
+            status='running',
+            phase='processing_batch',
+            current_batch=batch_index,
+            current_batch_rows=len(batch_rows),
+            completed_batches=batch_index,
+            pending_batches=len(batches) - batch_index,
+            rows_processed=input_rows_processed,
+            rows_remaining=max(0, len(data_rows) - input_rows_processed),
+        )
+
+    final_csv = write_csv_text(header, batched_output_rows)
+    explanation = ' '.join(part.strip() for part in explanation_parts if part and part.strip())
+    if not explanation:
+        explanation = "I've processed your request. Here's the updated CSV data."
+    if is_filter_request:
+        explanation = f"{explanation} Rows removed: {total_removed_rows}."
+
+    set_csv_ai_progress(
+        session_id,
+        status='completed',
+        phase='done',
+        current_batch=len(batches),
+        completed_batches=len(batches),
+        pending_batches=0,
+        rows_processed=len(data_rows),
+        rows_remaining=0,
+        output_rows=len(batched_output_rows),
+        rows_removed=total_removed_rows,
+    )
+
+    return final_csv, explanation
+
 # Database configuration
 # Prefer DATABASE_URL / SQLALCHEMY_DATABASE_URI env vars; default to local SQLite
 database_url = os.environ.get('DATABASE_URL') or os.environ.get('SQLALCHEMY_DATABASE_URI')
@@ -3756,6 +4118,7 @@ def cleanup_ai_data(dashboard_id):
                 dashboard_id=dashboard_id,
                 user_id=session['user_id']
             ).delete()
+            clear_csv_ai_progress(session_id)
         
         if extraction_id:
             deleted_extractions = PDFExtraction.query.filter_by(
@@ -3833,6 +4196,24 @@ def process_csv_with_ai(dashboard_id):
         conversation_history = chat_session.get_conversation_history()
         effective_csv_data = csv_data or chat_session.get_csv_data() or ""
 
+        header, data_rows = parse_csv_text(effective_csv_data)
+        planned_batches = split_csv_batches(data_rows, CSV_AI_BATCH_SIZE) if data_rows else []
+        set_csv_ai_progress(
+            chat_session.session_id,
+            status='queued',
+            phase='preparing',
+            is_batched=len(data_rows) >= CSV_AI_ENFORCE_THRESHOLD,
+            batch_size=CSV_AI_BATCH_SIZE,
+            total_batches=len(planned_batches) if len(data_rows) >= CSV_AI_ENFORCE_THRESHOLD else (1 if data_rows else 0),
+            completed_batches=0,
+            pending_batches=len(planned_batches) if len(data_rows) >= CSV_AI_ENFORCE_THRESHOLD else (1 if data_rows else 0),
+            current_batch=0,
+            total_rows=len(data_rows),
+            rows_processed=0,
+            rows_remaining=len(data_rows),
+            filter_request=is_row_reducing_csv_request(prompt),
+        )
+
         # Add user message to conversation
         chat_session.add_message('user', prompt, effective_csv_data)
 
@@ -3843,7 +4224,8 @@ def process_csv_with_ai(dashboard_id):
             "csv_data.csv", 
             prompt, 
             conversation_history,
-            effective_csv_data
+            effective_csv_data,
+            session_id=chat_session.session_id
         )
         
         # Update session with new CSV data and AI response
@@ -3858,13 +4240,57 @@ def process_csv_with_ai(dashboard_id):
         })
         
     except ValueError as e:
+        if session_id:
+            set_csv_ai_progress(session_id, status='error', phase='failed', error=str(e))
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        if session_id:
+            set_csv_ai_progress(session_id, status='error', phase='failed', error=str(e))
         logger.error(f"CSV processing error: {str(e)}", extra={
             'user_id': session['user_id'],
             'dashboard_id': dashboard_id
         })
         return jsonify({'error': f'CSV processing failed: {str(e)}'}), 500
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/ai/progress/<session_id>', methods=['GET'])
+def get_csv_ai_progress_state(dashboard_id, session_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id,
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    chat_session = ChatSession.query.filter_by(
+        session_id=session_id,
+        dashboard_id=dashboard_id,
+        user_id=session['user_id']
+    ).first()
+    if not chat_session:
+        return jsonify({'error': 'Session not found'}), 404
+
+    state = get_csv_ai_progress(session_id)
+    if not state:
+        return jsonify({
+            'session_id': session_id,
+            'status': 'idle',
+            'phase': 'idle',
+            'is_batched': False,
+            'total_batches': 0,
+            'completed_batches': 0,
+            'pending_batches': 0,
+            'current_batch': 0,
+            'batch_size': CSV_AI_BATCH_SIZE,
+            'total_rows': 0,
+            'rows_processed': 0,
+            'rows_remaining': 0,
+        })
+
+    return jsonify({'session_id': session_id, **state})
 
 @app.route('/api/dashboard/<int:dashboard_id>/ai/extract-pdf', methods=['POST'])
 @limiter.limit(RATE_LIMITS['pdf_upload'])
@@ -4418,7 +4844,7 @@ def call_aimodel_excel_api(user, excel_data, filename, prompt=""):
 
 
 
-def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, conversation_history, current_csv_data):
+def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, conversation_history, current_csv_data, session_id=None):
     """Call AI model API with conversation context and current CSV data for processing"""
     # Get user's selected AI model
     model_key = user.default_ai_provider or 'mistral'
@@ -4443,44 +4869,64 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
     # Determine if this is initial extraction or follow-up processing
     is_initial_extraction = not current_csv_data or len(current_csv_data.strip()) == 0
     
-    if is_initial_extraction:
-        # System prompt for initial PDF extraction
-        system_prompt = """You are a financial document processing assistant. You extract and process transaction data from bank statements and convert it to CSV format.
-        
-        Extract all transactions from the bank statement text and return them in CSV format with these columns:
-        - Date (format: YYYY-MM-DD)
-        - Description (the merchant or transaction description)
-        - Amount (numeric value, positive for expenses)
-        - Category (use one of: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation)
-        
-        Only include actual transactions, not headers or totals. If you can't determine the category, use 'misc'.
-        Return only the CSV data, no additional text.
-        """
-        
-        # Build messages with conversation history
-        messages = [
-            {
-                "role": "system",
-                "content": system_prompt
-            }
-        ]
-        
-        # Add conversation history (limit to last 4 turns to stay within token limits)
-        for turn in conversation_history[-4:]:
+    try:
+        if is_initial_extraction:
+            system_prompt = """You are a financial document processing assistant. You extract and process transaction data from bank statements and convert it to CSV format.
+            
+            Extract all transactions from the bank statement text and return them in CSV format with these columns:
+            - Date (format: YYYY-MM-DD)
+            - Description (the merchant or transaction description)
+            - Amount (numeric value, positive for expenses)
+            - Category (use one of: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation)
+            
+            Only include actual transactions, not headers or totals. If you can't determine the category, use 'misc'.
+            Return only the CSV data, no additional text.
+            """
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                }
+            ]
+
+            for turn in conversation_history[-4:]:
+                messages.append({
+                    "role": turn.get('role', 'user'),
+                    "content": turn.get('content', '')
+                })
+
+            current_message = f"Extract transaction data from this bank statement ({filename}). Here's the extracted text:\n\n{extracted_text}\n\nAdditional instructions: {prompt}"
             messages.append({
-                "role": turn.get('role', 'user'),
-                "content": turn.get('content', '')
+                "role": "user",
+                "content": current_message
             })
-        
-        # Add current user message with extracted text
-        current_message = f"Extract transaction data from this bank statement ({filename}). Here's the extracted text:\n\n{extracted_text}\n\nAdditional instructions: {prompt}"
-        messages.append({
-            "role": "user",
-            "content": current_message
-        })
-        
-    else:
-        # System prompt for CSV processing with conversation context
+
+            ai_response = call_ai_chat_completion(
+                model_config,
+                model_name,
+                url,
+                headers,
+                messages,
+                len(conversation_history),
+                True
+            )
+            return extract_csv_and_explanation_from_ai_response(ai_response, current_csv_data)
+
+        header, data_rows = parse_csv_text(current_csv_data)
+        should_batch = len(data_rows) >= CSV_AI_ENFORCE_THRESHOLD
+        if should_batch:
+            return process_csv_with_ai_batches(
+                model_config,
+                model_name,
+                url,
+                headers,
+                prompt,
+                conversation_history,
+                current_csv_data,
+                session_id=session_id
+            )
+
         system_prompt = """You are a CSV data processing assistant. You help users filter, categorize, and transform their expense data.
         
         The user will provide CSV data and a request. You should:
@@ -4491,139 +4937,72 @@ def call_aimodel_with_context_and_csv(user, extracted_text, filename, prompt, co
         
         Always return valid CSV format with these columns: Date, Description, Amount, Category.
         For categorization, use these categories: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation.
-        
-        Example responses:
-        - "I've filtered the data to show only transactions above $50. Here's the processed CSV:"
-        - "I've categorized the expenses based on the descriptions. Here's the updated CSV:"
         """
-        
-        # Build messages with conversation history
+
         messages = [
             {
                 "role": "system",
                 "content": system_prompt
             }
         ]
-        
-        # Add conversation history (limit to last 4 turns to stay within token limits)
+
         for turn in conversation_history[-4:]:
             messages.append({
                 "role": turn.get('role', 'user'),
                 "content": turn.get('content', '')
             })
-        
-        # Add current user message with current CSV data
-        current_message = f"CSV Data:\n{current_csv_data}\n\nUser Request: {prompt}\n\nPlease process this CSV data and return the processed CSV along with a brief explanation."
+
+        input_count = len(data_rows)
+        is_filter_request = is_row_reducing_csv_request(prompt)
+        row_expectation = (
+            f"Preserve the same header and exactly {input_count} data rows. "
+            "Do not drop, add, merge, duplicate, or reorder rows."
+        )
+        if is_filter_request:
+            row_expectation = (
+                f"This is an explicit filter/remove request. You may return fewer than {input_count} data rows, "
+                "but you must never invent, split, merge, duplicate, or reorder rows. "
+                "Keep the original header."
+            )
+
+        current_message = (
+            f"CSV Data:\n{current_csv_data}\n\n"
+            f"User Request: {prompt}\n\n"
+            f"Integrity rule: {row_expectation}\n"
+            "Please process this CSV data and return the processed CSV along with a brief explanation."
+        )
         messages.append({
             "role": "user",
             "content": current_message
         })
-    
-    payload = {
-        "model": model_name,
-        "messages": messages,
-        "temperature": 0.1,
-        "max_tokens": 2000
-    }
-    
-    logger.debug(f"Sending request to {model_config['name']} API with {len(conversation_history)} conversation turns", extra={
-        'is_initial_extraction': is_initial_extraction,
-        'conversation_turns': len(conversation_history)
-    })
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        logger.debug(f"API response status: {response.status_code}")
-        
-        if response.status_code != 200:
-            error_message = extract_provider_error_message(response)
-            logger.error(f"{model_config['name']} API error response: {error_message}")
-            raise ValueError(f"{model_config['name']} request failed: {error_message}")
-        
-        result = response.json()
-        ai_response = extract_chat_completion_content(result)
-        logger.debug(f"API response received: {len(ai_response)} characters")
-        
-        # Extract CSV from response - improved logic to separate explanation from CSV
-        lines = [line for line in ai_response.replace('```csv', '```').split('\n') if line.strip() != '```']
-        csv_lines = []
-        explanation_lines = []
-        in_csv_section = False
-        
-        for line in lines:
-            line = line.strip()
-            
-            # Check if we've found the CSV header
-            if line.lower().startswith('date,description,amount,category'):
-                in_csv_section = True
-                csv_lines.append(line)
-                continue
-            
-            # If we're in CSV section and line looks like CSV data
-            if in_csv_section and ',' in line:
-                # Check if this line contains actual CSV data (has date-like patterns or amounts)
-                has_date = any(pattern in line for pattern in ['202', '2024', '2025', '2026'])
-                has_amount = any(char.isdigit() for char in line) and any(char in line for char in ['.', '$'])
-                
-                if has_date or has_amount:
-                    csv_lines.append(line)
-                else:
-                    # This might be explanation text mixed in CSV section
-                    explanation_lines.append(line)
-            elif not in_csv_section:
-                # This is explanation text before CSV section
-                explanation_lines.append(line)
-            else:
-                # This might be explanation text after CSV section
-                explanation_lines.append(line)
-        
-        # If no CSV found, try alternative CSV detection
-        if not csv_lines:
-            logger.debug("No CSV found with header detection, trying alternative detection")
-            for line in lines:
-                line = line.strip()
-                # Look for lines that have CSV-like structure (comma-separated with dates/amounts)
-                if ',' in line and len(line.split(',')) >= 3:
-                    # Check if it has date-like patterns or amounts
-                    has_date = any(pattern in line for pattern in ['202', '2024', '2025', '2026', '/', '-'])
-                    has_amount = any(char.isdigit() for char in line) and any(char in line for char in ['.', '$'])
-                    
-                    if has_date or has_amount:
-                        csv_lines.append(line)
-                    else:
-                        explanation_lines.append(line)
-                else:
-                    explanation_lines.append(line)
-        
-        # If still no CSV found, return a default structure
-        if not csv_lines:
-            logger.warning("No CSV found in AI response, preserving current CSV data")
-            if current_csv_data and current_csv_data.strip():
-                explanation = '\n'.join(explanation_lines).strip() or (
-                    "I understood the request, but the AI response did not include valid CSV output. "
-                    "Your current CSV data has been preserved."
+
+        ai_response = call_ai_chat_completion(
+            model_config,
+            model_name,
+            url,
+            headers,
+            messages,
+            len(conversation_history),
+            False
+        )
+
+        csv_data, explanation = extract_csv_and_explanation_from_ai_response(ai_response, current_csv_data)
+        _, output_rows = parse_csv_text(csv_data)
+        if input_count:
+            if not is_filter_request and len(output_rows) != input_count:
+                raise ValueError(
+                    f"AI returned {len(output_rows)} rows, but {input_count} were required. "
+                    "No data was changed. Try a smaller request or a simpler transform."
                 )
-                return current_csv_data, explanation
-            raise ValueError("AI response did not include valid CSV output")
-        
-        # Clean up CSV data - remove any explanation text that might have been included
-        clean_csv_lines = []
-        for line in csv_lines:
-            # Skip lines that look like explanation text
-            if any(keyword in line.lower() for keyword in ['explanation:', 'i removed', 'i filtered', 'i categorized', '**']):
-                explanation_lines.append(line)
-            else:
-                clean_csv_lines.append(line)
-        
-        csv_data = '\n'.join(clean_csv_lines)
-        
-        # Create a clean explanation message
-        explanation = '\n'.join(explanation_lines).strip()
-        if not explanation:
-            explanation = "I've processed your request. Here's the updated CSV data."
-        
+            if is_filter_request and len(output_rows) > input_count:
+                raise ValueError(
+                    "Filtering requests may not increase row count. No data was changed."
+                )
+            if is_filter_request:
+                explanation = f"{explanation} Rows removed: {max(0, input_count - len(output_rows))}."
+
         return csv_data, explanation
-        
+
     except requests.exceptions.Timeout as e:
         logger.error(f"{model_config['name']} API request timed out: {str(e)}")
         raise ValueError(f"{model_config['name']} request timed out. Please try a smaller CSV or retry.")

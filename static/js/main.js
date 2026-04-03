@@ -185,6 +185,8 @@ const ApiClient = {
         }),
         
         getSession: (dashboardId, sessionId) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/session/${sessionId}`),
+
+        getProgress: (dashboardId, sessionId) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/progress/${sessionId}`),
         
         cleanup: (dashboardId, data) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/cleanup`, {
             method: 'POST',

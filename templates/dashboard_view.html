@@ -186,6 +186,36 @@
         margin: 0;
     }
 
+    .ai-batch-status {
+        margin-top: -0.15rem;
+        margin-bottom: 0.75rem;
+        padding: 0.55rem 0.7rem;
+        border: 1px solid #dbe3ea;
+        border-radius: 0.45rem;
+        background: #f8fafc;
+    }
+
+    .ai-batch-status-title {
+        font-size: 0.68rem;
+        line-height: 1;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #64748b;
+        margin-bottom: 0.35rem;
+    }
+
+    .ai-batch-status-summary {
+        font-size: 0.84rem;
+        color: #0f172a;
+        margin-bottom: 0.18rem;
+    }
+
+    .ai-batch-status-meta {
+        font-size: 0.76rem;
+        color: #64748b;
+    }
+
     .option-card {
         cursor: pointer;
         transition: transform 0.15s ease, box-shadow 0.15s ease;
@@ -694,6 +724,11 @@
                     <div class="card-body ingress-rail-body">
                         <p class="text-muted small mb-3">Ask for cleanup help after pasting or uploading data. Example: normalize dates, remove duplicates, or categorize uncategorized rows.</p>
                         <div id="aiChatMessages" class="mb-3" style="max-height: 420px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 0.375rem; padding: 1rem;"></div>
+                        <div id="aiBatchStatus" class="ai-batch-status d-none">
+                            <div class="ai-batch-status-title">Batch Processing</div>
+                            <div id="aiBatchStatusSummary" class="ai-batch-status-summary"></div>
+                            <div id="aiBatchStatusMeta" class="ai-batch-status-meta"></div>
+                        </div>
                         <div class="input-group">
                             <input type="text" id="aiChatInput" class="form-control" placeholder="Describe how to clean the loaded data...">
                             <button class="btn btn-success" id="sendAiMessage"><i class="fas fa-paper-plane"></i></button>
