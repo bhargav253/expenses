@@ -16,7 +16,7 @@ class DashboardManager {
         this.securityToastShown = false;
         this.analyticsSessionId = null;
         this.aiProgressPollTimer = null;
-        this.aiProgressHideTimer = null;
+        this.currentAiJobId = null;
         this.init();
     }
 
@@ -643,7 +643,7 @@ class DashboardManager {
         const meta = document.getElementById('aiBatchStatusMeta');
         if (!container || !summary || !meta) return;
 
-        if (!progress || progress.status === 'idle') {
+        if (!progress || progress.status === 'idle' || progress.status === 'completed' || progress.status === 'error') {
             container.classList.add('d-none');
             summary.textContent = '';
             meta.textContent = '';
@@ -655,7 +655,8 @@ class DashboardManager {
         const totalBatches = Number(progress.total_batches || 0);
         const completedBatches = Number(progress.completed_batches || 0);
         const pendingBatches = Number(progress.pending_batches || 0);
-        const currentBatch = Number(progress.current_batch || 0);
+        const runningBatches = Number(progress.running_batches || 0);
+        const activeBatchIndexes = Array.isArray(progress.active_batch_indexes) ? progress.active_batch_indexes : [];
         const batchSize = Number(progress.batch_size || 0);
         const totalRows = Number(progress.total_rows || 0);
         const rowsProcessed = Number(progress.rows_processed || 0);
@@ -668,22 +669,17 @@ class DashboardManager {
                 : `Queued ${totalRows} rows for AI processing.`;
         } else if (status === 'running') {
             summary.textContent = isBatched
-                ? `Running batch ${Math.max(1, currentBatch)} of ${totalBatches}.`
+                ? `Running ${runningBatches || activeBatchIndexes.length || 1} batch${(runningBatches || activeBatchIndexes.length || 1) === 1 ? '' : 'es'} of ${totalBatches}.`
                 : `Processing ${totalRows} rows.`;
-        } else if (status === 'completed') {
-            const outputRows = Number(progress.output_rows || totalRows);
-            const removedRows = Number(progress.rows_removed || 0);
-            summary.textContent = removedRows > 0
-                ? `Completed. ${outputRows} rows kept, ${removedRows} removed.`
-                : `Completed. ${outputRows} rows returned.`;
-        } else if (status === 'error') {
-            summary.textContent = progress.error || 'Batch processing failed.';
         }
 
         const metaParts = [];
         if (isBatched) {
             metaParts.push(`${completedBatches}/${totalBatches} done`);
             metaParts.push(`${pendingBatches} pending`);
+            if (activeBatchIndexes.length) {
+                metaParts.push(`active ${activeBatchIndexes.join(', ')}`);
+            }
             if (batchSize) {
                 metaParts.push(`${batchSize} rows/batch`);
             }
@@ -703,55 +699,43 @@ class DashboardManager {
             clearInterval(this.aiProgressPollTimer);
             this.aiProgressPollTimer = null;
         }
+        this.currentAiJobId = null;
     }
 
-    scheduleAiBatchStatusHide() {
-        if (this.aiProgressHideTimer) {
-            clearTimeout(this.aiProgressHideTimer);
-        }
-        this.aiProgressHideTimer = setTimeout(() => {
-            this.renderAiBatchStatus(null);
-            this.aiProgressHideTimer = null;
-        }, 1600);
-    }
-
-    async pollAiProgress(sessionId) {
-        if (!sessionId) return;
+    async pollAiProgress(jobId) {
+        if (!jobId) return null;
         try {
-            const progress = await ApiClient.ai.getProgress(this.dashboardId, sessionId);
+            const progress = await ApiClient.ai.getJob(this.dashboardId, jobId);
             this.renderAiBatchStatus(progress);
             if (progress.status === 'completed' || progress.status === 'error') {
                 this.stopAiProgressPolling();
-                if (progress.status === 'completed') {
-                    this.scheduleAiBatchStatusHide();
-                }
+                this.renderAiBatchStatus(null);
             }
+            return progress;
         } catch (error) {
             debug.warn('Failed to fetch AI batch progress:', error);
+            return null;
         }
     }
 
-    startAiProgressPolling(sessionId) {
+    startAiProgressPolling(jobId, initialStatus = null) {
         this.stopAiProgressPolling();
-        if (this.aiProgressHideTimer) {
-            clearTimeout(this.aiProgressHideTimer);
-            this.aiProgressHideTimer = null;
-        }
-        this.renderAiBatchStatus({
+        this.currentAiJobId = jobId;
+        this.renderAiBatchStatus(initialStatus || {
             status: 'queued',
             total_batches: 0,
             completed_batches: 0,
             pending_batches: 0,
-            current_batch: 0,
+            running_batches: 0,
             batch_size: 0,
             total_rows: 0,
             rows_processed: 0,
             rows_remaining: 0
         });
-        this.pollAiProgress(sessionId);
+        this.pollAiProgress(jobId);
         this.aiProgressPollTimer = setInterval(() => {
-            this.pollAiProgress(sessionId);
-        }, 1200);
+            this.pollAiProgress(jobId);
+        }, 2000);
     }
     
     async sendAiChatMessage() {
@@ -996,37 +980,65 @@ class DashboardManager {
                 const response = await ApiClient.ai.createSession(this.dashboardId, this.currentCsvData);
                 this.currentSessionId = response.session_id;
             }
-
-            this.startAiProgressPolling(this.currentSessionId);
             
-            // Send to AI API with current CSV data
             const response = await ApiClient.ai.processCsv(
                 this.dashboardId,
                 this.currentSessionId,
                 prompt,
                 this.currentCsvData
             );
-            
-            // Add AI response
-            this.addAiChatMessage('assistant', response.message);
-            
-            // Update CSV preview if new data is provided
-            if (response.processed_csv) {
-                this.currentCsvData = response.processed_csv;
-                this.showCsvPreview(response.processed_csv);
+
+            if (response.session_id) {
+                this.currentSessionId = response.session_id;
             }
-            await this.pollAiProgress(this.currentSessionId);
+            if (!response.job_id) {
+                throw new Error('AI processing job was not created.');
+            }
+
+            this.startAiProgressPolling(response.job_id, {
+                status: response.status || 'queued',
+                is_batched: Number(response.total_batches || 0) > 1,
+                total_batches: response.total_batches || 0,
+                completed_batches: 0,
+                pending_batches: response.total_batches || 0,
+                running_batches: 0,
+                batch_size: response.batch_size || 0,
+                total_rows: response.total_rows || 0,
+                rows_processed: 0,
+                rows_remaining: response.total_rows || 0
+            });
+
+            let finalResult = null;
+            while (true) {
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+                const progress = await this.pollAiProgress(response.job_id);
+                if (!progress) {
+                    continue;
+                }
+                if (progress.status === 'completed') {
+                    finalResult = progress;
+                    break;
+                }
+                if (progress.status === 'error') {
+                    throw new Error(progress.error || 'AI batch processing failed.');
+                }
+            }
+
+            if (finalResult?.message) {
+                this.addAiChatMessage('assistant', finalResult.message);
+            }
+            if (finalResult?.processed_csv) {
+                this.currentCsvData = finalResult.processed_csv;
+                this.showCsvPreview(finalResult.processed_csv);
+            }
             
         } catch (error) {
             debug.error('AI processing error:', error);
             const message = error?.response?.error || error?.message || 'Sorry, I encountered an error processing your request. Please try again.';
             this.addAiChatMessage('assistant', message);
-            this.renderAiBatchStatus({
-                status: 'error',
-                error: message
-            });
         } finally {
             this.stopAiProgressPolling();
+            this.renderAiBatchStatus(null);
         }
     }
 

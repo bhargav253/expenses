@@ -12,6 +12,7 @@ import json
 import csv
 from pathlib import Path
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import uuid
 import logging
@@ -124,6 +125,9 @@ talisman = Talisman(app, **talisman_config)
 
 CSV_AI_PROGRESS = {}
 CSV_AI_PROGRESS_LOCK = threading.Lock()
+CSV_AI_JOB_THREADS = {}
+CSV_AI_JOB_THREADS_LOCK = threading.Lock()
+CSV_AI_BATCH_CONCURRENCY = max(1, int(os.environ.get('CSV_AI_BATCH_CONCURRENCY', '2')))
 
 # Structured Logging Setup
 # ========================
@@ -2419,6 +2423,262 @@ Do not change the header names.
 
     return final_csv, explanation
 
+
+def build_csv_processing_messages(prompt, conversation_history, csv_data, batch_label, expected_rows, is_filter_request):
+    system_prompt = """You are a CSV data processing assistant. You help users filter, categorize, and transform their expense data.
+
+The user will provide CSV data and a request. You should:
+1. Understand the user's request
+2. Process the CSV data accordingly
+3. Return the processed CSV data
+4. Provide a brief explanation of what you did
+
+Always return valid CSV format with these columns: Date, Description, Amount, Category.
+For categorization, use these categories: car, gas, grocery, home exp, home setup, gym, hospital, misc, rent, mortgage, restaurant, service, shopping, transport, utility, vacation.
+Do not change the header names.
+"""
+
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt
+        }
+    ]
+
+    for turn in conversation_history[-4:]:
+        messages.append({
+            "role": turn.get('role', 'user'),
+            "content": turn.get('content', '')
+        })
+
+    row_expectation = (
+        f"Preserve the same header and exactly {expected_rows} data rows. "
+        "Do not drop, add, merge, duplicate, or reorder rows."
+    )
+    if is_filter_request:
+        row_expectation = (
+            f"This is an explicit filter/remove request. You may return fewer than {expected_rows} data rows, "
+            "but you must never invent, split, merge, duplicate, or reorder rows. Keep the original header."
+        )
+
+    messages.append({
+        "role": "user",
+        "content": (
+            f"CSV Data ({batch_label}):\n{csv_data}\n\n"
+            f"User Request: {prompt}\n\n"
+            f"Integrity rule: {row_expectation}\n"
+            "Please process this CSV data and return the processed CSV along with a brief explanation."
+        )
+    })
+
+    return messages
+
+
+def run_csv_ai_job_batch(job_id, batch_index, batch_csv, input_row_count, prompt, conversation_history, model_config, model_name, url, headers, is_filter_request):
+    messages = build_csv_processing_messages(
+        prompt,
+        conversation_history,
+        batch_csv,
+        f"batch {batch_index + 1}",
+        input_row_count,
+        is_filter_request
+    )
+    ai_response = call_ai_chat_completion(
+        model_config,
+        model_name,
+        url,
+        headers,
+        messages,
+        len(conversation_history),
+        False
+    )
+    processed_batch_csv, batch_explanation = extract_csv_and_explanation_from_ai_response(ai_response, batch_csv)
+    processed_header, processed_rows = parse_csv_text(processed_batch_csv)
+    input_header, _ = parse_csv_text(batch_csv)
+    if [cell.strip().lower() for cell in processed_header[:4]] != [cell.strip().lower() for cell in input_header[:4]]:
+        raise ValueError(f"AI changed the CSV header on batch {batch_index + 1}.")
+    output_count = len(processed_rows)
+    if not is_filter_request and output_count != input_row_count:
+        raise ValueError(
+            f"AI returned {output_count} rows for batch {batch_index + 1}, but {input_row_count} were required."
+        )
+    if is_filter_request and output_count > input_row_count:
+        raise ValueError(
+            f"AI returned more rows than it received for batch {batch_index + 1}."
+        )
+    return {
+        'job_id': job_id,
+        'batch_index': batch_index,
+        'processed_rows': processed_rows,
+        'output_row_count': output_count,
+        'rows_removed': max(0, input_row_count - output_count),
+        'explanation': batch_explanation,
+    }
+
+
+def execute_csv_ai_job(job_id):
+    try:
+        with app.app_context():
+            job = CsvAiJob.query.filter_by(job_id=job_id).first()
+            if not job:
+                return
+
+            chat_session = job.chat_session
+            user = job.user
+            current_csv_data = chat_session.get_csv_data() or ''
+            header, data_rows = parse_csv_text(current_csv_data)
+            if not header:
+                job.status = 'failed'
+                job.phase = 'failed'
+                job.error_message = 'CSV data is empty or invalid'
+                job.completed_at = datetime.utcnow()
+                db.session.commit()
+                return
+
+            job.status = 'running'
+            job.phase = 'processing'
+            job.started_at = datetime.utcnow()
+            db.session.commit()
+
+            model_key = user.default_ai_provider or 'mistral'
+            model_config = AI_MODELS.get(model_key)
+            if not model_config:
+                raise ValueError(f"Unsupported AI model: {model_key}")
+
+            api_key = user.get_decrypted_api_key(model_config['api_key_field'])
+            if not api_key:
+                raise ValueError(f"{model_config['name']} API key not configured")
+
+            url = model_config['api_url']
+            model_name = model_config['model_name']
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+
+            conversation_history = chat_session.get_conversation_history()
+            is_filter_request = job.is_filter_request
+            batches = split_csv_batches(data_rows, job.batch_size)
+            batch_csv_payloads = [write_csv_text(header, rows) for rows in batches]
+            batch_results = {}
+            explanation_parts = []
+            total_removed_rows = 0
+            rows_processed = 0
+
+            for wave_start in range(0, len(batches), job.concurrency):
+                wave_end = min(wave_start + job.concurrency, len(batches))
+                wave_indexes = list(range(wave_start, wave_end))
+
+                for batch_index in wave_indexes:
+                    batch_row = CsvAiJobBatch.query.filter_by(job_id=job.id, batch_index=batch_index).first()
+                    if batch_row:
+                        batch_row.status = 'running'
+                        batch_row.started_at = datetime.utcnow()
+                    job.phase = 'processing'
+                db.session.commit()
+
+                wave_errors = []
+                with ThreadPoolExecutor(max_workers=job.concurrency) as executor:
+                    futures = {
+                        executor.submit(
+                            run_csv_ai_job_batch,
+                            job.job_id,
+                            batch_index,
+                            batch_csv_payloads[batch_index],
+                            len(batches[batch_index]),
+                            job.prompt,
+                            conversation_history,
+                            model_config,
+                            model_name,
+                            url,
+                            headers,
+                            is_filter_request
+                        ): batch_index
+                        for batch_index in wave_indexes
+                    }
+
+                    for future in as_completed(futures):
+                        batch_index = futures[future]
+                        batch_row = CsvAiJobBatch.query.filter_by(job_id=job.id, batch_index=batch_index).first()
+                        try:
+                            result = future.result()
+                            batch_results[batch_index] = result['processed_rows']
+                            total_removed_rows += result['rows_removed']
+                            rows_processed += len(batches[batch_index])
+                            if result['explanation']:
+                                explanation_parts.append(result['explanation'])
+                            if batch_row:
+                                batch_row.status = 'completed'
+                                batch_row.output_row_count = result['output_row_count']
+                                batch_row.rows_removed = result['rows_removed']
+                                batch_row.explanation = result['explanation']
+                                batch_row.completed_at = datetime.utcnow()
+                        except Exception as exc:
+                            wave_errors.append(str(exc))
+                            if batch_row:
+                                batch_row.status = 'failed'
+                                batch_row.error_message = str(exc)
+                                batch_row.completed_at = datetime.utcnow()
+
+                        job.completed_batches = CsvAiJobBatch.query.filter_by(job_id=job.id, status='completed').count()
+                        job.failed_batches = CsvAiJobBatch.query.filter_by(job_id=job.id, status='failed').count()
+                        job.rows_processed = rows_processed
+                        job.rows_removed = total_removed_rows
+                        db.session.commit()
+
+                if wave_errors:
+                    job.status = 'failed'
+                    job.phase = 'failed'
+                    job.error_message = wave_errors[0]
+                    job.completed_at = datetime.utcnow()
+                    db.session.commit()
+                    return
+
+            merged_rows = []
+            for batch_index in range(len(batches)):
+                merged_rows.extend(batch_results.get(batch_index, []))
+
+            final_csv = write_csv_text(header, merged_rows)
+            explanation = ' '.join(part.strip() for part in explanation_parts if part and part.strip())
+            if not explanation:
+                explanation = "I've processed your request. Here's the updated CSV data."
+            if is_filter_request:
+                explanation = f"{explanation} Rows removed: {total_removed_rows}."
+
+            chat_session.update_csv_data(final_csv)
+            chat_session.add_message('assistant', explanation, final_csv)
+            job.set_result_csv_data(final_csv)
+            job.explanation = explanation
+            job.status = 'completed'
+            job.phase = 'done'
+            job.completed_at = datetime.utcnow()
+            job.rows_processed = len(data_rows)
+            job.rows_removed = total_removed_rows
+            db.session.commit()
+    except Exception as exc:
+        with app.app_context():
+            job = CsvAiJob.query.filter_by(job_id=job_id).first()
+            if job:
+                job.status = 'failed'
+                job.phase = 'failed'
+                job.error_message = str(exc)
+                job.completed_at = datetime.utcnow()
+                db.session.commit()
+        logger.error(f"CSV AI background job failed: {exc}", extra={'job_id': job_id})
+    finally:
+        with CSV_AI_JOB_THREADS_LOCK:
+            CSV_AI_JOB_THREADS.pop(job_id, None)
+
+
+def launch_csv_ai_job(job_id):
+    with CSV_AI_JOB_THREADS_LOCK:
+        existing = CSV_AI_JOB_THREADS.get(job_id)
+        if existing and existing.is_alive():
+            return
+        worker = threading.Thread(target=execute_csv_ai_job, args=(job_id,), daemon=True)
+        CSV_AI_JOB_THREADS[job_id] = worker
+        worker.start()
+
 # Database configuration
 # Prefer DATABASE_URL / SQLALCHEMY_DATABASE_URI env vars; default to local SQLite
 database_url = os.environ.get('DATABASE_URL') or os.environ.get('SQLALCHEMY_DATABASE_URI')
@@ -2454,7 +2714,7 @@ google = oauth.register(
 )
 
 # Import models
-from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, TradeAgentRun, TrendScanRun, TrendScanEvent, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar, MappingRuleSet, MappingRuleEntry
+from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, TradeAgentRun, TrendScanRun, TrendScanEvent, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar, MappingRuleSet, MappingRuleEntry, CsvAiJob, CsvAiJobBatch
 
 
 def ensure_schema_compatibility():
@@ -4113,6 +4373,16 @@ def cleanup_ai_data(dashboard_id):
     
     try:
         if session_id:
+            job_ids = [
+                job.id for job in CsvAiJob.query.join(ChatSession, CsvAiJob.chat_session_id == ChatSession.id).filter(
+                    ChatSession.session_id == session_id,
+                    ChatSession.dashboard_id == dashboard_id,
+                    ChatSession.user_id == session['user_id']
+                ).all()
+            ]
+            if job_ids:
+                CsvAiJobBatch.query.filter(CsvAiJobBatch.job_id.in_(job_ids)).delete(synchronize_session=False)
+                CsvAiJob.query.filter(CsvAiJob.id.in_(job_ids)).delete(synchronize_session=False)
             deleted_sessions = ChatSession.query.filter_by(
                 session_id=session_id,
                 dashboard_id=dashboard_id,
@@ -4147,7 +4417,7 @@ def cleanup_ai_data(dashboard_id):
 @app.route('/api/dashboard/<int:dashboard_id>/ai/process', methods=['POST'])
 @limiter.limit(RATE_LIMITS['ai_processing'])
 def process_csv_with_ai(dashboard_id):
-    """Process CSV data with AI"""
+    """Queue CSV data processing with AI and return a job handle."""
     if 'user_id' not in session:
         return jsonify({'error': 'Not authenticated'}), 401
     
@@ -4191,61 +4461,68 @@ def process_csv_with_ai(dashboard_id):
                 conversation_history=encrypt_str('[]')
             )
             db.session.add(chat_session)
+            db.session.flush()
 
         # Get conversation history
         conversation_history = chat_session.get_conversation_history()
         effective_csv_data = csv_data or chat_session.get_csv_data() or ""
 
         header, data_rows = parse_csv_text(effective_csv_data)
-        planned_batches = split_csv_batches(data_rows, CSV_AI_BATCH_SIZE) if data_rows else []
-        set_csv_ai_progress(
-            chat_session.session_id,
-            status='queued',
-            phase='preparing',
-            is_batched=len(data_rows) >= CSV_AI_ENFORCE_THRESHOLD,
-            batch_size=CSV_AI_BATCH_SIZE,
-            total_batches=len(planned_batches) if len(data_rows) >= CSV_AI_ENFORCE_THRESHOLD else (1 if data_rows else 0),
-            completed_batches=0,
-            pending_batches=len(planned_batches) if len(data_rows) >= CSV_AI_ENFORCE_THRESHOLD else (1 if data_rows else 0),
-            current_batch=0,
-            total_rows=len(data_rows),
-            rows_processed=0,
-            rows_remaining=len(data_rows),
-            filter_request=is_row_reducing_csv_request(prompt),
-        )
+        if not header or not data_rows:
+            return jsonify({'error': 'No normalized CSV data is available to process.'}), 400
+
+        is_filter_request = is_row_reducing_csv_request(prompt)
+        planned_batches = split_csv_batches(data_rows, CSV_AI_BATCH_SIZE)
 
         # Add user message to conversation
         chat_session.add_message('user', prompt, effective_csv_data)
-
-        # Process with AI
-        processed_csv, ai_response = call_aimodel_with_context_and_csv(
-            user, 
-            "",  # No PDF text for CSV processing
-            "csv_data.csv", 
-            prompt, 
-            conversation_history,
-            effective_csv_data,
-            session_id=chat_session.session_id
+        job = CsvAiJob(
+            job_id=str(uuid.uuid4()),
+            dashboard_id=dashboard_id,
+            user_id=session['user_id'],
+            chat_session_id=chat_session.id,
+            prompt=prompt,
+            status='queued',
+            phase='queued',
+            is_filter_request=is_filter_request,
+            concurrency=CSV_AI_BATCH_CONCURRENCY,
+            batch_size=CSV_AI_BATCH_SIZE,
+            total_rows=len(data_rows),
+            total_batches=len(planned_batches),
+            completed_batches=0,
+            failed_batches=0,
+            rows_processed=0,
+            rows_removed=0,
         )
-        
-        # Update session with new CSV data and AI response
-        chat_session.update_csv_data(processed_csv)
-        chat_session.add_message('assistant', ai_response, processed_csv)
+        db.session.add(job)
+        db.session.flush()
+
+        for batch_index, batch_rows in enumerate(planned_batches):
+            db.session.add(CsvAiJobBatch(
+                job_id=job.id,
+                batch_index=batch_index,
+                status='queued',
+                input_row_count=len(batch_rows),
+                output_row_count=0,
+                rows_removed=0
+            ))
+
         db.session.commit()
-        
+        launch_csv_ai_job(job.job_id)
+
         return jsonify({
-            'processed_csv': processed_csv,
-            'message': ai_response,
-            'session_id': chat_session.session_id
+            'job_id': job.job_id,
+            'session_id': chat_session.session_id,
+            'status': job.status,
+            'total_rows': job.total_rows,
+            'total_batches': job.total_batches,
+            'batch_size': job.batch_size,
+            'concurrency': job.concurrency
         })
         
     except ValueError as e:
-        if session_id:
-            set_csv_ai_progress(session_id, status='error', phase='failed', error=str(e))
         return jsonify({'error': str(e)}), 400
     except Exception as e:
-        if session_id:
-            set_csv_ai_progress(session_id, status='error', phase='failed', error=str(e))
         logger.error(f"CSV processing error: {str(e)}", extra={
             'user_id': session['user_id'],
             'dashboard_id': dashboard_id
@@ -4291,6 +4568,58 @@ def get_csv_ai_progress_state(dashboard_id, session_id):
         })
 
     return jsonify({'session_id': session_id, **state})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/ai/jobs/<job_id>', methods=['GET'])
+@limiter.limit("600/hour")
+def get_csv_ai_job_status(dashboard_id, job_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = DashboardMember.query.filter_by(
+        dashboard_id=dashboard_id,
+        user_id=session['user_id']
+    ).first()
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    job = CsvAiJob.query.filter_by(
+        job_id=job_id,
+        dashboard_id=dashboard_id,
+        user_id=session['user_id']
+    ).first()
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    running_batches = CsvAiJobBatch.query.filter_by(job_id=job.id, status='running').all()
+    queued_count = CsvAiJobBatch.query.filter_by(job_id=job.id, status='queued').count()
+    completed_count = CsvAiJobBatch.query.filter_by(job_id=job.id, status='completed').count()
+    failed_count = CsvAiJobBatch.query.filter_by(job_id=job.id, status='failed').count()
+
+    payload = {
+        'job_id': job.job_id,
+        'session_id': job.chat_session.session_id,
+        'status': job.status,
+        'phase': job.phase,
+        'is_batched': job.total_batches > 1,
+        'total_rows': job.total_rows,
+        'total_batches': job.total_batches,
+        'completed_batches': completed_count,
+        'failed_batches': failed_count,
+        'pending_batches': queued_count,
+        'running_batches': len(running_batches),
+        'active_batch_indexes': [batch.batch_index + 1 for batch in running_batches],
+        'batch_size': job.batch_size,
+        'rows_processed': job.rows_processed,
+        'rows_remaining': max(0, job.total_rows - job.rows_processed),
+        'rows_removed': job.rows_removed,
+        'filter_request': job.is_filter_request,
+        'concurrency': job.concurrency,
+        'error': job.error_message,
+        'message': job.explanation if job.status == 'completed' else None,
+        'processed_csv': job.get_result_csv_data() if job.status == 'completed' else None,
+    }
+    return jsonify(payload)
 
 @app.route('/api/dashboard/<int:dashboard_id>/ai/extract-pdf', methods=['POST'])
 @limiter.limit(RATE_LIMITS['pdf_upload'])
