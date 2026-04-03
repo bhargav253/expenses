@@ -30,6 +30,22 @@
         padding-bottom: 0.15rem;
         min-height: calc(1.5em + 0.3rem + 2px);
     }
+
+    #deleteMappingRuleSet:disabled {
+        color: #b87171;
+        border-color: #e5b7b7;
+        background: #f8e7e7;
+        opacity: 1;
+        cursor: not-allowed;
+    }
+
+    .remove-mapping-row:disabled {
+        color: #b87171;
+        border-color: #e5b7b7;
+        background: #f8e7e7;
+        opacity: 1;
+        cursor: not-allowed;
+    }
 </style>
 {% endblock %}
 
@@ -443,6 +459,8 @@ document.addEventListener('DOMContentLoaded', function() {
     function renderMappingRuleRows(entries) {
         const tbody = document.getElementById('mappingRulesTableBody');
         tbody.innerHTML = '';
+        const active = getActiveMappingRuleSet();
+        const rowDeleteDisabled = Boolean(active && active.is_default && !isCreatingMappingRuleSet);
         const rows = entries && entries.length ? entries : [{ pattern: '', category: 'misc' }];
         rows.forEach((entry) => {
             const tr = document.createElement('tr');
@@ -450,7 +468,7 @@ document.addEventListener('DOMContentLoaded', function() {
             tr.innerHTML = `
                 <td class="py-1"><input type="text" class="form-control form-control-sm mapping-pattern" value="${escapeHtml(entry.pattern || '')}" placeholder="e.g. doordash|uber eats"></td>
                 <td class="py-1"><select class="form-select form-select-sm mapping-category">${categoryOptions}</select></td>
-                <td class="text-end py-1"><button type="button" class="btn btn-sm btn-outline-danger remove-mapping-row px-2 py-1"><i class="fas fa-trash"></i></button></td>
+                <td class="text-end py-1"><button type="button" class="btn btn-sm btn-outline-danger remove-mapping-row px-2 py-1" ${rowDeleteDisabled ? 'disabled title="Default mapping rows cannot be deleted"' : ''}><i class="fas fa-trash"></i></button></td>
             `;
             tbody.appendChild(tr);
         });
