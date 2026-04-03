@@ -1,0 +1,94 @@
+amazon web services,service
+aws.amazon,service
+amazon prime,service
+amazon digit,service
+amazon tips,shopping
+amzngrcytip,grocery
+amazon groce,grocery
+wfm amazon,grocery
+wholefds,grocery
+wholefds bll,grocery
+whole foods,grocery
+amazon fresh,grocery
+amazon mark,shopping
+amazon mktpl,shopping
+amazon mktp,shopping
+amazon markeplace,shopping
+amazon marketplace,shopping
+amazon.com,shopping
+amzn mktp,shopping
+amzn mktp us,shopping
+amzn.com/bill,shopping
+amzn.com,shopping
+instacart|ic* instacart|costco by instacart,grocery
+safeway,grocery
+trinethra super market,grocery
+trinethra supermarket,grocery
+trinethra sup,grocery
+namaste plaza,grocery
+patel brothers,grocery
+india cash & carry,grocery
+india cash and carry,grocery
+rai`s india bazar,grocery
+rai s india b,grocery
+new nilgiri,grocery
+coconut hill,grocery
+sprouts,grocery
+costco whse,grocery
+sanjose groce,grocery
+super india,grocery
+lucky #,grocery
+wal-mart,grocery
+walmart,grocery
+walgreens,hospital
+cvs pharmacy,hospital
+csv pharmacy,hospital
+dental,hospital
+us bank home mtg mtg pymnt,mortgage
+santa clara dtac,mortgage
+ca047 - avalon s,rent
+avalon s,rent
+pgande,utility
+pge,utility
+san jose water,utility
+sjwater,utility
+comcast,utility
+ecoguard pest manage,utility
+damian - gardener,utility
+damian- gardener,utility
+damian -gardener,utility
+gardener,utility
+geico,car
+anderson honda,car
+capitol premier car wa,car
+citizens bank online pmt,car
+fair oaks smog check,car
+costco gas,gas
+gas n go,gas
+rotten robbie,gas
+shell oil,gas
+chevron,gas
+valero,gas
+falco inc,gas
+doordash dashpass,service
+uber  *eats,restaurant
+doordash|dd *doordash|dd doordash,restaurant
+postmates,restaurant
+too good to go,restaurant
+aramark educational/r,restaurant
+commons east cafe,restaurant
+cns vending,restaurant
+cmsvend,restaurant
+apple espr bar,restaurant
+apple caffe,restaurant
+caffe macs,restaurant
+starbucks,restaurant
+philz coffee,restaurant
+panera bread,restaurant
+subway,restaurant
+swathi tiffins|ulavacharu tiff|idly express|madurai idli kadai,restaurant
+annapoorna,restaurant
+bawarchi,restaurant
+chaat|biryani|biryaniz|rangoli|mint indian bistro|my indian piz|everest cuisine|sri's kitchen|sris kitchen|delhiwali chaat|pav bhaji hut|bombay bar and grill|punjabcaf|the everest,restaurant
+uber trip|lyft  *1 ride|lyft ride|zipcar,transport
+avis rent-a-car,vacation

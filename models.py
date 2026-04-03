@@ -517,6 +517,35 @@ class UploadedFile(db.Model):
     dashboard = db.relationship('Dashboard')
     user = db.relationship('User')
 
+
+class MappingRuleSet(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    name = db.Column(db.String(255), nullable=False)
+    is_default = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User')
+    entries = db.relationship(
+        'MappingRuleEntry',
+        back_populates='rule_set',
+        cascade='all, delete-orphan',
+        order_by='MappingRuleEntry.position.asc()'
+    )
+
+
+class MappingRuleEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    rule_set_id = db.Column(db.Integer, db.ForeignKey('mapping_rule_set.id'), nullable=False, index=True)
+    pattern = db.Column(db.String(500), nullable=False)
+    category = db.Column(db.String(100), nullable=False)
+    position = db.Column(db.Integer, default=0, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    rule_set = db.relationship('MappingRuleSet', back_populates='entries')
+
 class ChatSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
