@@ -178,6 +178,8 @@ const ApiClient = {
             method: 'POST',
             body: { session_id: sessionId, prompt, csv_data: csvData }
         }),
+
+        getJob: (dashboardId, jobId) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/jobs/${jobId}`),
         
         createSession: (dashboardId, csvData) => ApiClient.request(`/api/dashboard/${dashboardId}/ai/session`, {
             method: 'POST',

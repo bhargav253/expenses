@@ -597,6 +597,71 @@ class ChatSession(db.Model):
         self.current_csv_data = encrypt_str(csv_data)
         self.updated_at = datetime.utcnow()
 
+
+class CsvAiJob(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    job_id = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    chat_session_id = db.Column(db.Integer, db.ForeignKey('chat_session.id'), nullable=False, index=True)
+    prompt = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(50), default='queued', nullable=False)  # queued, running, completed, failed
+    phase = db.Column(db.String(50), default='queued')
+    is_filter_request = db.Column(db.Boolean, default=False)
+    concurrency = db.Column(db.Integer, default=2)
+    batch_size = db.Column(db.Integer, default=40)
+    total_rows = db.Column(db.Integer, default=0)
+    total_batches = db.Column(db.Integer, default=0)
+    completed_batches = db.Column(db.Integer, default=0)
+    failed_batches = db.Column(db.Integer, default=0)
+    rows_processed = db.Column(db.Integer, default=0)
+    rows_removed = db.Column(db.Integer, default=0)
+    result_csv_data = db.Column(db.Text)
+    explanation = db.Column(db.Text)
+    error_message = db.Column(db.Text)
+    started_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dashboard = db.relationship('Dashboard')
+    user = db.relationship('User')
+    chat_session = db.relationship('ChatSession')
+    batches = db.relationship(
+        'CsvAiJobBatch',
+        back_populates='job',
+        order_by='CsvAiJobBatch.batch_index',
+        cascade='all, delete-orphan'
+    )
+
+    def get_result_csv_data(self):
+        return decrypt_str(self.result_csv_data)
+
+    def set_result_csv_data(self, csv_data):
+        self.result_csv_data = encrypt_str(csv_data) if csv_data is not None else None
+
+
+class CsvAiJobBatch(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    job_id = db.Column(db.Integer, db.ForeignKey('csv_ai_job.id'), nullable=False, index=True)
+    batch_index = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(50), default='queued', nullable=False)  # queued, running, completed, failed
+    input_row_count = db.Column(db.Integer, default=0)
+    output_row_count = db.Column(db.Integer, default=0)
+    rows_removed = db.Column(db.Integer, default=0)
+    error_message = db.Column(db.Text)
+    explanation = db.Column(db.Text)
+    started_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    job = db.relationship('CsvAiJob', back_populates='batches')
+
+    __table_args__ = (
+        db.UniqueConstraint('job_id', 'batch_index', name='unique_csv_ai_job_batch'),
+    )
+
 class DashboardInvitation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     dashboard_id = db.Column(db.Integer, db.ForeignKey('dashboard.id'), nullable=False)
