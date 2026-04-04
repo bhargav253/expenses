@@ -8,11 +8,14 @@
     .dataTables_wrapper .dataTables_filter input {
         border: 1px solid var(--border);
         border-radius: 999px;
-        padding: 0.55rem 0.95rem;
+        padding: 0.24rem 0.7rem;
         background: #fff;
         color: var(--brand-deep);
         box-shadow: none;
         margin-left: 0.5rem;
+        min-height: calc(1.45em + 0.48rem + 2px);
+        font-size: 0.84rem;
+        line-height: 1.15;
     }
 
     .dataTables_wrapper .dataTables_filter input:focus {
@@ -257,6 +260,117 @@
         overflow-y: auto;
     }
 
+    .stock-detail-card .form-control,
+    .stock-detail-card .form-select,
+    .stock-detail-card .btn,
+    .watchlist-card .form-control,
+    .watchlist-card .btn,
+    .watchlist-card .input-group-text {
+        padding-top: 0.2rem;
+        padding-bottom: 0.2rem;
+        font-size: 0.84rem;
+        line-height: 1.15;
+        min-height: calc(1.5em + 0.4rem + 2px);
+    }
+
+    .stock-detail-card .btn,
+    .watchlist-card .btn {
+        padding-left: 0.55rem;
+        padding-right: 0.55rem;
+    }
+
+    .stock-detail-card .btn-group .btn {
+        padding-top: 0.16rem;
+        padding-bottom: 0.16rem;
+        min-height: calc(1.5em + 0.32rem + 2px);
+    }
+
+    .stock-detail-card .input-group-text,
+    .watchlist-card .input-group-text {
+        padding-top: 0.15rem;
+        padding-bottom: 0.15rem;
+        padding-inline: 0.45rem;
+        min-height: calc(1.5em + 0.3rem + 2px);
+    }
+
+    .stock-detail-compare-inputs .form-control,
+    .stock-detail-compare-inputs .btn {
+        padding-top: 0.15rem;
+        padding-bottom: 0.15rem;
+        min-height: calc(1.5em + 0.3rem + 2px);
+        font-size: 0.82rem;
+    }
+
+    .stock-detail-mode-panel {
+        min-height: 5.2rem;
+    }
+
+    .stock-detail-compare-inputs {
+        visibility: hidden;
+        pointer-events: none;
+        opacity: 0;
+        min-height: 2rem;
+    }
+
+    .stock-detail-compare-inputs.is-visible {
+        visibility: visible;
+        pointer-events: auto;
+        opacity: 1;
+    }
+
+    .stock-detail-chart {
+        width: 100%;
+        height: 24rem;
+    }
+
+    .stock-detail-empty {
+        min-height: 24rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px dashed rgba(15, 23, 42, 0.12);
+        border-radius: 0.85rem;
+        background: rgba(248, 250, 252, 0.72);
+        color: #64748b;
+        text-align: center;
+        padding: 1rem;
+    }
+
+    .stock-detail-metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 0.75rem;
+    }
+
+    .stock-detail-metric {
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 0.75rem;
+        padding: 0.8rem 0.9rem;
+        background: #fff;
+    }
+
+    .stock-detail-metric-label {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #64748b;
+        margin-bottom: 0.22rem;
+    }
+
+    .stock-detail-metric-value {
+        font-size: 0.95rem;
+        color: var(--brand-deep);
+        font-weight: 600;
+    }
+
+    .stock-detail-compare-inputs .form-control {
+        min-width: 0;
+    }
+
+    .watchlist-symbol-btn {
+        font-weight: 600;
+    }
+
     @media (max-width: 1199.98px) {
         .screener-sidebar {
             border-right: 0;
@@ -306,7 +420,7 @@
                 </button>
             </div>
             <div class="card-body workspace-rail-body">
-            <div class="card shadow-sm mb-4">
+            <div class="card shadow-sm mb-4 stock-detail-card">
                 <div class="card-header bg-white">
                     <h5 class="mb-0"><i class="fas fa-plus-circle me-2 text-primary"></i>Create Watchlist</h5>
                 </div>
@@ -367,6 +481,66 @@
     </div>
 
     <div class="col-xl-9" id="workspaceMainColumn">
+        <div id="stockDetailSection">
+            <div class="card shadow-sm mb-4 stock-detail-card">
+                <div class="card-header bg-white d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
+                    <div>
+                        <h5 class="mb-1"><i class="fas fa-chart-candlestick me-2 text-primary"></i>Stock Detail</h5>
+                        <div class="small text-muted">Search any ticker, or click a symbol in the watchlist to load its daily chart and the last 24 intraday bars.</div>
+                    </div>
+                    <form class="d-flex flex-column flex-sm-row gap-2 align-items-stretch" id="stockDetailSearchForm" style="min-width: min(100%, 380px);">
+                        <input type="text" class="form-control" id="stockDetailSearchInput" placeholder="Search ticker, e.g. NVDA" maxlength="16">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-search me-1"></i>Load
+                        </button>
+                    </form>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex flex-column flex-xl-row justify-content-between align-items-xl-center gap-3 mb-3">
+                        <div>
+                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                                <h4 class="mb-0" id="stockDetailSymbolLabel">No ticker selected</h4>
+                                <span class="badge bg-light text-dark d-none" id="stockDetailExchangeBadge"></span>
+                            </div>
+                            <div class="text-muted" id="stockDetailNameLabel">Choose a ticker from the watchlist or search above.</div>
+                        </div>
+                        <div class="d-flex flex-column align-items-stretch gap-2 stock-detail-mode-panel">
+                            <div class="btn-group" role="group" aria-label="Stock detail mode">
+                                <input type="radio" class="btn-check" name="stockDetailMode" id="stockDetailModeDaily" value="daily" autocomplete="off" checked>
+                                <label class="btn btn-outline-primary" for="stockDetailModeDaily">Daily</label>
+                                <input type="radio" class="btn-check" name="stockDetailMode" id="stockDetailModeHourly" value="hourly" autocomplete="off">
+                                <label class="btn btn-outline-primary" for="stockDetailModeHourly">Hourly</label>
+                                <input type="radio" class="btn-check" name="stockDetailMode" id="stockDetailModeCompare" value="compare" autocomplete="off">
+                                <label class="btn btn-outline-primary" for="stockDetailModeCompare">Compare</label>
+                            </div>
+                            <form class="stock-detail-compare-inputs" id="stockDetailCompareForm">
+                                <div class="d-flex flex-column flex-lg-row gap-2">
+                                    <input type="text" class="form-control form-control-sm" id="stockCompareSymbol1" maxlength="16" placeholder="Ticker 1">
+                                    <input type="text" class="form-control form-control-sm" id="stockCompareSymbol2" maxlength="16" placeholder="Ticker 2">
+                                    <input type="text" class="form-control form-control-sm" id="stockCompareSymbol3" maxlength="16" placeholder="Ticker 3 (optional)">
+                                    <button type="submit" class="btn btn-sm btn-outline-primary">Compare</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="small text-muted mb-3" id="stockDetailStatus">Daily chart shows data since 2025-01-01. Hourly chart shows the last 24 intraday bars in the DB.</div>
+
+                    <div id="stockDetailChartEmpty" class="stock-detail-empty">
+                        <div>
+                            <div class="fw-semibold mb-1">No stock selected yet</div>
+                            <div class="small">Load a ticker to render candles and fundamentals here.</div>
+                        </div>
+                    </div>
+                    <div id="stockDetailChart" class="stock-detail-chart d-none"></div>
+
+                    <div class="mt-4">
+                        <div class="fw-semibold mb-3">Fundamentals & Performance</div>
+                        <div class="stock-detail-metrics" id="stockDetailMetrics"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
         <div id="agentResearchSection"></div>
         <div id="screenersSection">
         <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center mb-3 gap-2">
@@ -548,7 +722,9 @@
                                     {% for item in watchlist['items'] %}
                                     {% set snapshot = item.snapshot %}
                                     <tr>
-                                        <td class="fw-semibold">{{ item.symbol }}</td>
+                                        <td>
+                                            <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-symbol-btn" data-symbol="{{ item.symbol }}">{{ item.symbol }}</button>
+                                        </td>
                                         <td>{{ item.asset_name or 'Unknown asset' }}</td>
                                         <td>{{ "$%.2f"|format(snapshot.price) if snapshot and snapshot.price is not none else "N/A" }}</td>
                                         <td>
@@ -903,6 +1079,7 @@
 {% block extra_js %}
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 <script nonce="{{ csp_nonce() }}">
     const investingDashboardId = {{ dashboard.id }};
     const investingSavedScreeners = {{ screeners|tojson }};
@@ -913,6 +1090,7 @@
     const defaultScreenerWatchlistId = {{ default_screener_watchlist_id|tojson }};
     const selectedWatchlistId = {{ selected_watchlist['id'] if selected_watchlist else 'null' }};
     const selectedWatchlistPage = {{ selected_watchlist_page|tojson }};
+    const initialStockSymbol = {{ (selected_watchlist_page['items'][0]['symbol'] if selected_watchlist_page and selected_watchlist_page['items'] else None)|tojson }};
     const investingWatchlistChoices = [
         {% for watchlist in watchlists %}
         { id: {{ watchlist['id'] }}, name: {{ watchlist['name']|tojson }} }{% if not loop.last %},{% endif %}
@@ -980,6 +1158,16 @@
                 sort_dir: watchlistQueryState.sort_dir || 'desc'
             });
             return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/watchlists/${watchlistId}?${params.toString()}`);
+        },
+        getStock(symbol) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/stocks/${encodeURIComponent(symbol)}`);
+        },
+        getStockChart(symbol, mode) {
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/stocks/${encodeURIComponent(symbol)}/chart?mode=${encodeURIComponent(mode)}`);
+        },
+        compareStocks(symbols) {
+            const params = new URLSearchParams({ symbols: symbols.join(',') });
+            return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/stocks/compare?${params.toString()}`);
         },
         createTradeIdea(data) {
             return ApiClient.request(`/api/dashboard/${investingDashboardId}/investing/trade-ideas`, {
@@ -1087,6 +1275,20 @@
         const screenerResultsEmpty = document.getElementById('screenerResultsEmpty');
         const screenerResultsWrapper = document.getElementById('screenerResultsWrapper');
         const screenerResultsBody = document.getElementById('screenerResultsBody');
+        const stockDetailSection = document.getElementById('stockDetailSection');
+        const stockDetailSearchForm = document.getElementById('stockDetailSearchForm');
+        const stockDetailSearchInput = document.getElementById('stockDetailSearchInput');
+        const stockDetailSymbolLabel = document.getElementById('stockDetailSymbolLabel');
+        const stockDetailNameLabel = document.getElementById('stockDetailNameLabel');
+        const stockDetailExchangeBadge = document.getElementById('stockDetailExchangeBadge');
+        const stockDetailStatus = document.getElementById('stockDetailStatus');
+        const stockDetailChartContainer = document.getElementById('stockDetailChart');
+        const stockDetailChartEmpty = document.getElementById('stockDetailChartEmpty');
+        const stockDetailMetrics = document.getElementById('stockDetailMetrics');
+        const stockDetailCompareForm = document.getElementById('stockDetailCompareForm');
+        const stockCompareSymbol1 = document.getElementById('stockCompareSymbol1');
+        const stockCompareSymbol2 = document.getElementById('stockCompareSymbol2');
+        const stockCompareSymbol3 = document.getElementById('stockCompareSymbol3');
         const screenerRunMeta = document.getElementById('screenerRunMeta');
         const screenerCriterionHeaders = [
             document.getElementById('screenerCriterionHeader1'),
@@ -1108,6 +1310,10 @@
         let activeAgentMode = 'ticker';
         let activeWatchlistPayload = selectedWatchlistPage || null;
         let watchlistSearchDebounce = null;
+        let selectedStockSymbolState = initialStockSymbol || null;
+        let stockDetailMode = 'daily';
+        let stockDetailChart = null;
+        let stockDetailSeries = [];
         const editTradeIdeaModal = editTradeIdeaModalElement && window.bootstrap ? new bootstrap.Modal(editTradeIdeaModalElement) : null;
 
         function getActiveWatchlistId() {
@@ -1139,11 +1345,12 @@
             workspaceAgentColumn.remove();
         }
 
-        if (agentResearchSection && watchlistSection && screenersSection && tradeIdeasSection) {
-            workspaceMainColumn.appendChild(agentResearchSection);
+        if (stockDetailSection && agentResearchSection && watchlistSection && screenersSection && tradeIdeasSection) {
+            workspaceMainColumn.appendChild(stockDetailSection);
             workspaceMainColumn.appendChild(watchlistSection);
-            workspaceMainColumn.appendChild(screenersSection);
             workspaceMainColumn.appendChild(tradeIdeasSection);
+            workspaceMainColumn.appendChild(screenersSection);
+            workspaceMainColumn.appendChild(agentResearchSection);
         }
 
         function setColumnWidth(element, widthClass) {
@@ -1314,6 +1521,232 @@
         function formatPercent(value, digits = 2) {
             if (value === null || value === undefined || value === '') return 'N/A';
             return `${formatNumber(value, { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
+        }
+
+        function formatCompactCurrency(value) {
+            if (value === null || value === undefined || value === '') return 'N/A';
+            return new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: 'USD',
+                notation: Math.abs(value) >= 1000000 ? 'compact' : 'standard',
+                maximumFractionDigits: Math.abs(value) >= 1000 ? 2 : 2
+            }).format(value);
+        }
+
+        function destroyStockChart() {
+            if (stockDetailChart) {
+                stockDetailChart.remove();
+                stockDetailChart = null;
+                stockDetailSeries = [];
+            }
+        }
+
+        function showStockChartEmpty(message) {
+            destroyStockChart();
+            if (stockDetailChartContainer) {
+                stockDetailChartContainer.classList.add('d-none');
+            }
+            if (stockDetailChartEmpty) {
+                stockDetailChartEmpty.classList.remove('d-none');
+                stockDetailChartEmpty.innerHTML = `
+                    <div>
+                        <div class="fw-semibold mb-1">${Utils.escapeHtml(message || 'No chart data available')}</div>
+                    </div>
+                `;
+            }
+        }
+
+        function ensureStockChart(localizationFormatter = null) {
+            if (!stockDetailChartContainer) {
+                return null;
+            }
+            destroyStockChart();
+            stockDetailChartEmpty?.classList.add('d-none');
+            stockDetailChartContainer.classList.remove('d-none');
+            stockDetailChart = LightweightCharts.createChart(stockDetailChartContainer, {
+                autoSize: true,
+                layout: {
+                    background: { color: '#ffffff' },
+                    textColor: '#334155'
+                },
+                grid: {
+                    vertLines: { color: 'rgba(148, 163, 184, 0.16)' },
+                    horzLines: { color: 'rgba(148, 163, 184, 0.16)' }
+                },
+                rightPriceScale: {
+                    borderColor: 'rgba(148, 163, 184, 0.24)'
+                },
+                timeScale: {
+                    borderColor: 'rgba(148, 163, 184, 0.24)',
+                    timeVisible: stockDetailMode === 'hourly',
+                    secondsVisible: false
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal
+                },
+                localization: localizationFormatter ? { priceFormatter: localizationFormatter } : undefined
+            });
+            return stockDetailChart;
+        }
+
+        function renderStockMetrics(stock) {
+            if (!stockDetailMetrics) {
+                return;
+            }
+            const snapshot = stock?.snapshot || {};
+            const fundamentals = stock?.fundamentals || {};
+            const performance = stock?.performance || {};
+            const metrics = [
+                ['Last Price', snapshot.last_price != null ? Utils.formatCurrency(snapshot.last_price) : 'N/A'],
+                ['Market Cap', formatCompactCurrency(fundamentals.market_cap ?? snapshot.market_cap)],
+                ['P/E', fundamentals.pe_ratio != null ? formatNumber(fundamentals.pe_ratio, { maximumFractionDigits: 2 }) : 'N/A'],
+                ['EPS', fundamentals.eps != null ? Utils.formatCurrency(fundamentals.eps) : 'N/A'],
+                ['Revenue TTM', formatCompactCurrency(fundamentals.revenue_ttm)],
+                ['Earnings TTM', formatCompactCurrency(fundamentals.earnings_ttm)],
+                ['1D', formatPercent(performance['1d'])],
+                ['5D', formatPercent(performance['5d'])],
+                ['13D', formatPercent(performance['13d'])],
+                ['1Y', formatPercent(performance['1y'])],
+            ];
+            stockDetailMetrics.innerHTML = metrics.map(([label, value]) => `
+                <div class="stock-detail-metric">
+                    <div class="stock-detail-metric-label">${Utils.escapeHtml(label)}</div>
+                    <div class="stock-detail-metric-value">${Utils.escapeHtml(String(value))}</div>
+                </div>
+            `).join('');
+        }
+
+        function renderStockSummary(stock) {
+            if (!stock) {
+                stockDetailSymbolLabel.textContent = 'No ticker selected';
+                stockDetailNameLabel.textContent = 'Choose a ticker from the watchlist or search above.';
+                stockDetailExchangeBadge.classList.add('d-none');
+                if (stockDetailSection) {
+                    stockDetailSection.dataset.selectedSymbol = '';
+                }
+                renderStockMetrics(null);
+                return;
+            }
+            stockDetailSymbolLabel.textContent = stock.symbol || 'Unknown';
+            stockDetailNameLabel.textContent = [
+                stock.name || 'Unknown company',
+                stock.sector,
+                stock.industry
+            ].filter(Boolean).join(' · ');
+            if (stockDetailSection) {
+                stockDetailSection.dataset.selectedSymbol = stock.symbol || '';
+            }
+            if (stock.exchange) {
+                stockDetailExchangeBadge.textContent = stock.exchange;
+                stockDetailExchangeBadge.classList.remove('d-none');
+            } else {
+                stockDetailExchangeBadge.classList.add('d-none');
+            }
+            renderStockMetrics(stock);
+        }
+
+        function renderSingleStockChart(payload) {
+            if (!payload || !Array.isArray(payload.points) || !payload.points.length) {
+                showStockChartEmpty(stockDetailMode === 'hourly' ? 'No intraday data available for this symbol yet.' : 'No daily data available for this symbol yet.');
+                return;
+            }
+            const formatter = (value) => Utils.formatCurrency(value);
+            const chart = ensureStockChart(formatter);
+            if (!chart) {
+                return;
+            }
+            const candleSeries = chart.addCandlestickSeries({
+                upColor: '#16a34a',
+                downColor: '#dc2626',
+                borderVisible: false,
+                wickUpColor: '#16a34a',
+                wickDownColor: '#dc2626'
+            });
+            candleSeries.setData(payload.points.map((point) => ({
+                time: point.time,
+                open: point.open,
+                high: point.high,
+                low: point.low,
+                close: point.close,
+            })));
+            stockDetailSeries = [candleSeries];
+            chart.timeScale().fitContent();
+        }
+
+        function renderComparisonChart(payload) {
+            const series = Array.isArray(payload?.series) ? payload.series : [];
+            if (!series.length) {
+                showStockChartEmpty('No comparison data is available for the selected symbols.');
+                return;
+            }
+            const chart = ensureStockChart((value) => `${value.toFixed(2)}%`);
+            if (!chart) {
+                return;
+            }
+            const colors = ['#2563eb', '#dc2626', '#16a34a'];
+            stockDetailSeries = series.map((entry, index) => {
+                const lineSeries = chart.addLineSeries({
+                    color: colors[index % colors.length],
+                    lineWidth: 2,
+                    title: entry.symbol
+                });
+                lineSeries.setData(entry.points || []);
+                return lineSeries;
+            });
+            chart.timeScale().fitContent();
+        }
+
+        async function loadStockDetail(symbol, { mode = stockDetailMode, compareSymbols = null } = {}) {
+            const resolvedSymbol = (
+                symbol ||
+                selectedStockSymbolState ||
+                stockDetailSection?.dataset?.selectedSymbol ||
+                (stockDetailSymbolLabel?.textContent || '')
+            ).trim().toUpperCase();
+
+            if ((!resolvedSymbol || resolvedSymbol === 'NO TICKER SELECTED') && mode !== 'compare') {
+                renderStockSummary(null);
+                showStockChartEmpty('No ticker selected yet');
+                return;
+            }
+            stockDetailStatus.textContent = 'Loading stock detail...';
+            try {
+                if (mode === 'compare') {
+                    const symbols = (compareSymbols || [stockCompareSymbol1?.value, stockCompareSymbol2?.value, stockCompareSymbol3?.value])
+                        .map((value) => (value || '').trim().toUpperCase())
+                        .filter(Boolean)
+                        .slice(0, 3);
+                    if (symbols.length < 2) {
+                        throw new Error('Enter at least 2 ticker symbols for comparison.');
+                    }
+                    const payload = await InvestingApi.compareStocks(symbols);
+                    stockDetailSymbolLabel.textContent = 'Comparison';
+                    stockDetailNameLabel.textContent = symbols.join(' vs ');
+                    stockDetailExchangeBadge.classList.add('d-none');
+                    stockDetailMetrics.innerHTML = '';
+                    renderComparisonChart(payload);
+                    stockDetailStatus.textContent = 'Daily comparison chart using percent change from the first visible point.';
+                    return;
+                }
+
+                const [stockResponse, chartResponse] = await Promise.all([
+                    InvestingApi.getStock(resolvedSymbol),
+                    InvestingApi.getStockChart(resolvedSymbol, mode)
+                ]);
+                selectedStockSymbolState = resolvedSymbol;
+                if (stockDetailSection) {
+                    stockDetailSection.dataset.selectedSymbol = resolvedSymbol;
+                }
+                renderStockSummary(stockResponse.stock);
+                renderSingleStockChart(chartResponse);
+                stockDetailStatus.textContent = mode === 'hourly'
+                    ? `Showing the last 24 intraday bars for ${selectedStockSymbolState}.`
+                    : `Showing daily candles for ${selectedStockSymbolState} since 2025-01-01.`;
+            } catch (error) {
+                showStockChartEmpty(error.message || 'Failed to load stock detail.');
+                stockDetailStatus.textContent = error.message || 'Failed to load stock detail.';
+                Utils.showNotification(error.message || 'Failed to load stock detail', 'danger');
+            }
         }
 
         function renderTradeAgentResult(run) {
@@ -1826,6 +2259,23 @@
         }
 
         function bindWatchlistActions() {
+            watchlistsContainer?.querySelectorAll('.watchlist-symbol-btn').forEach((button) => {
+                if (button.dataset.bound === 'true') {
+                    return;
+                }
+                button.dataset.bound = 'true';
+                button.addEventListener('click', async () => {
+                    const symbol = button.getAttribute('data-symbol');
+                    const dailyToggle = document.getElementById('stockDetailModeDaily');
+                    if (dailyToggle) {
+                        dailyToggle.checked = true;
+                    }
+                    stockDetailMode = 'daily';
+                    await loadStockDetail(symbol, { mode: 'daily' });
+                    stockDetailSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                });
+            });
+
             const addForm = watchlistsContainer?.querySelector('.addSymbolForm');
             if (addForm && addForm.dataset.bound !== 'true') {
                 addForm.dataset.bound = 'true';
@@ -2002,7 +2452,7 @@
                                 const perf12Class = snapshot.price_performance_12d >= 0 ? 'text-success' : 'text-danger';
                                 return `
                                     <tr>
-                                        <td class="fw-semibold">${Utils.escapeHtml(item.symbol || '')}</td>
+                                        <td><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none watchlist-symbol-btn" data-symbol="${Utils.escapeHtml(item.symbol || '')}">${Utils.escapeHtml(item.symbol || '')}</button></td>
                                         <td>${Utils.escapeHtml(item.asset_name || 'Unknown asset')}</td>
                                         <td data-order="${snapshot.price ?? -1}">
                                             ${snapshot.price !== null && snapshot.price !== undefined ? `$${formatNumber(snapshot.price, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A'}
@@ -2105,6 +2555,12 @@
                     throw new Error('Watchlist response was empty');
                 }
                 renderSelectedWatchlist(payload.watchlist);
+                if (!selectedStockSymbolState) {
+                    const firstSymbol = payload.watchlist?.items?.[0]?.symbol;
+                    if (firstSymbol) {
+                        await loadStockDetail(firstSymbol, { mode: 'daily' });
+                    }
+                }
                 if (preserveScroll) {
                     const tableShell = watchlistsContainer?.querySelector('.watchlist-table-scroll');
                     if (tableShell) {
@@ -2221,9 +2677,65 @@
                     };
                     await InvestingApi.setSelectedWatchlist({ watchlist_id: selectedWatchlistIdSelect.value });
                     await loadSelectedWatchlist(selectedWatchlistIdSelect.value, { resetPage: true });
+                    const firstSymbol = activeWatchlistPayload?.items?.[0]?.symbol;
+                    if (firstSymbol) {
+                        const dailyToggle = document.getElementById('stockDetailModeDaily');
+                        if (dailyToggle) {
+                            dailyToggle.checked = true;
+                        }
+                        stockDetailMode = 'daily';
+                        await loadStockDetail(firstSymbol, { mode: 'daily' });
+                    }
                 } catch (error) {
                     Utils.showNotification(error.message || 'Failed to update selected watchlist', 'danger');
                 }
+            });
+        }
+
+        if (stockDetailSearchForm) {
+            stockDetailSearchForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const symbol = stockDetailSearchInput?.value?.trim()?.toUpperCase();
+                if (!symbol) {
+                    Utils.showNotification('Enter a ticker symbol first', 'warning');
+                    return;
+                }
+                const requestedMode = stockDetailMode === 'compare' ? 'daily' : stockDetailMode;
+                await loadStockDetail(symbol, { mode: requestedMode });
+            });
+        }
+
+        document.querySelectorAll('input[name="stockDetailMode"]').forEach((input) => {
+            input.addEventListener('change', async () => {
+                if (!input.checked) {
+                    return;
+                }
+                stockDetailMode = input.value;
+                stockDetailCompareForm?.classList.toggle('is-visible', stockDetailMode === 'compare');
+                if (stockDetailMode === 'compare') {
+                    if (selectedStockSymbolState && stockCompareSymbol1 && !stockCompareSymbol1.value) {
+                        stockCompareSymbol1.value = selectedStockSymbolState;
+                    }
+                    return;
+                }
+                if (selectedStockSymbolState) {
+                    await loadStockDetail(selectedStockSymbolState, { mode: stockDetailMode });
+                }
+            });
+        });
+
+        if (stockDetailCompareForm) {
+            stockDetailCompareForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                stockDetailMode = 'compare';
+                await loadStockDetail(null, {
+                    mode: 'compare',
+                    compareSymbols: [
+                        stockCompareSymbol1?.value,
+                        stockCompareSymbol2?.value,
+                        stockCompareSymbol3?.value
+                    ]
+                });
             });
         }
 
@@ -2378,6 +2890,9 @@
         bindTradeIdeaButtons();
         if (selectedWatchlistPage && selectedWatchlistPage.items) {
             bindWatchlistActions();
+            if (initialStockSymbol) {
+                loadStockDetail(initialStockSymbol, { mode: 'daily' });
+            }
         } else {
             loadSelectedWatchlist(selectedWatchlistId);
         }

@@ -17,6 +17,64 @@
     
     <!-- Custom CSS -->
     <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+    <style>
+        main.page-shell .form-control,
+        main.page-shell .form-select,
+        main.page-shell .btn,
+        main.page-shell .input-group-text {
+            font-size: 0.92rem;
+            line-height: 1.2;
+        }
+
+        main.page-shell .form-control,
+        main.page-shell .form-select {
+            padding-top: 0.3rem;
+            padding-bottom: 0.3rem;
+            min-height: calc(1.5em + 0.6rem + 2px);
+        }
+
+        main.page-shell textarea.form-control {
+            padding-top: 0.35rem;
+            padding-bottom: 0.35rem;
+            min-height: auto;
+        }
+
+        main.page-shell .btn {
+            padding-top: 0.32rem;
+            padding-bottom: 0.32rem;
+            padding-left: 0.72rem;
+            padding-right: 0.72rem;
+        }
+
+        main.page-shell .btn.btn-sm,
+        main.page-shell .form-control.form-control-sm,
+        main.page-shell .form-select.form-select-sm,
+        main.page-shell .input-group-sm > .form-control,
+        main.page-shell .input-group-sm > .form-select,
+        main.page-shell .input-group-sm > .input-group-text,
+        main.page-shell .input-group-sm > .btn {
+            font-size: 0.82rem;
+            line-height: 1.15;
+        }
+
+        main.page-shell .btn.btn-sm,
+        main.page-shell .input-group-sm > .btn {
+            padding-top: 0.18rem;
+            padding-bottom: 0.18rem;
+            padding-left: 0.55rem;
+            padding-right: 0.55rem;
+        }
+
+        main.page-shell .form-control.form-control-sm,
+        main.page-shell .form-select.form-select-sm,
+        main.page-shell .input-group-sm > .form-control,
+        main.page-shell .input-group-sm > .form-select,
+        main.page-shell .input-group-sm > .input-group-text {
+            padding-top: 0.16rem;
+            padding-bottom: 0.16rem;
+            min-height: calc(1.45em + 0.32rem + 2px);
+        }
+    </style>
     
     {% block extra_css %}{% endblock %}
 </head>
