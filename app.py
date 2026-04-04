@@ -702,6 +702,141 @@ def serialize_watchlist_summary(watchlist):
     }
 
 
+def get_asset_performance_map(asset_ids, window):
+    if not asset_ids or window < 2:
+        return {}
+
+    ranked_bars = (
+        db.session.query(
+            TickerDailyBar.asset_id.label('asset_id'),
+            TickerDailyBar.close.label('close_price'),
+            func.row_number().over(
+                partition_by=TickerDailyBar.asset_id,
+                order_by=TickerDailyBar.bar_date.desc()
+            ).label('row_num')
+        )
+        .filter(TickerDailyBar.asset_id.in_(asset_ids))
+        .subquery()
+    )
+
+    rows = (
+        db.session.query(
+            ranked_bars.c.asset_id,
+            ranked_bars.c.close_price,
+            ranked_bars.c.row_num
+        )
+        .filter(ranked_bars.c.row_num.in_([1, window]))
+        .all()
+    )
+
+    performance_map = {}
+    grouped_rows = {}
+    for asset_id, close_price, row_num in rows:
+        grouped_rows.setdefault(asset_id, {})[row_num] = close_price
+
+    for asset_id, close_points in grouped_rows.items():
+        current_price = close_points.get(1)
+        prior_price = close_points.get(window)
+        if current_price in (None, 0) or prior_price in (None, 0):
+            continue
+        performance_map[asset_id] = ((current_price - prior_price) / prior_price) * 100.0
+
+    return performance_map
+
+
+def compute_stock_performance(asset):
+    snapshot = asset.ticker_snapshot_latest
+    custom_windows = get_asset_performance_map([asset.id], 13)
+    return {
+        '1d': snapshot.today_change_percent if snapshot else None,
+        '5d': snapshot.price_performance_5d if snapshot else None,
+        '13d': custom_windows.get(asset.id),
+        '1y': snapshot.price_performance_52w if snapshot else None,
+    }
+
+
+def serialize_stock_detail(asset):
+    snapshot = asset.ticker_snapshot_latest
+    fundamentals = asset.ticker_fundamentals_latest
+    latest_fundamental_snapshot = (
+        FundamentalSnapshot.query.filter_by(asset_id=asset.id)
+        .order_by(FundamentalSnapshot.as_of_date.desc(), FundamentalSnapshot.fetched_at.desc())
+        .first()
+    )
+
+    last_price = snapshot.last_price if snapshot and snapshot.last_price is not None else None
+    pe_ratio = (
+        (fundamentals.pe_ratio if fundamentals and fundamentals.pe_ratio is not None else None)
+        or (snapshot.pe_ratio if snapshot and snapshot.pe_ratio is not None else None)
+        or (latest_fundamental_snapshot.pe_ratio if latest_fundamental_snapshot and latest_fundamental_snapshot.pe_ratio is not None else None)
+    )
+    eps = (last_price / pe_ratio) if last_price not in (None, 0) and pe_ratio not in (None, 0) else None
+    shares_outstanding = fundamentals.shares_outstanding if fundamentals and fundamentals.shares_outstanding is not None else None
+    earnings_ttm = (eps * shares_outstanding) if eps is not None and shares_outstanding not in (None, 0) else None
+
+    return {
+        'symbol': asset.symbol,
+        'name': asset.name,
+        'asset_type': asset.asset_type,
+        'exchange': asset.exchange,
+        'currency': asset.currency,
+        'sector': asset.sector,
+        'industry': asset.industry,
+        'snapshot': {
+            'last_price': snapshot.last_price if snapshot else None,
+            'today_change_percent': snapshot.today_change_percent if snapshot else None,
+            'market_cap': snapshot.market_cap if snapshot else None,
+            'volume': snapshot.volume if snapshot else None,
+            'quote_as_of': snapshot.quote_as_of.isoformat() if snapshot and snapshot.quote_as_of else None,
+        } if snapshot else None,
+        'fundamentals': {
+            'market_cap': (
+                fundamentals.market_cap if fundamentals and fundamentals.market_cap is not None
+                else (snapshot.market_cap if snapshot else None)
+            ),
+            'pe_ratio': pe_ratio,
+            'eps': eps,
+            'revenue_ttm': (
+                fundamentals.revenue if fundamentals and fundamentals.revenue is not None
+                else (snapshot.revenue if snapshot else None)
+            ),
+            'earnings_ttm': earnings_ttm,
+            'as_of_date': fundamentals.as_of_date.isoformat() if fundamentals and fundamentals.as_of_date else None,
+            'fetched_at': fundamentals.fetched_at.isoformat() if fundamentals and fundamentals.fetched_at else None,
+        },
+        'performance': compute_stock_performance(asset),
+    }
+
+
+def serialize_candlestick_points(rows, mode):
+    points = []
+    for row in rows:
+        points.append({
+            'time': int(row.bar_timestamp.timestamp()) if mode == 'hourly' else row.bar_date.isoformat(),
+            'open': row.open,
+            'high': row.high,
+            'low': row.low,
+            'close': row.close,
+            'volume': row.volume,
+        })
+    return points
+
+
+def resolve_investing_asset(symbol):
+    normalized_symbol = normalize_symbol(symbol)
+    if not normalized_symbol:
+        raise ValueError('Ticker symbol is required')
+
+    asset = Asset.query.filter_by(symbol=normalized_symbol).first()
+    if asset:
+        return asset
+
+    service = get_market_data_service()
+    asset = service.get_or_create_asset(normalized_symbol)
+    enqueue_asset_refresh(asset, include_backfill=False, include_fundamentals=True, include_intraday=True, priority=True)
+    return asset
+
+
 def get_watchlist_cache_coverage(watchlist):
     item_asset_ids = [item.asset_id for item in watchlist.items if item.asset_id]
     total_items = len(item_asset_ids)
@@ -2714,7 +2849,7 @@ google = oauth.register(
 )
 
 # Import models
-from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, TradeAgentRun, TrendScanRun, TrendScanEvent, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar, MappingRuleSet, MappingRuleEntry, CsvAiJob, CsvAiJobBatch
+from models import User, Dashboard, DashboardMember, Expense, Category, UploadedFile, ChatSession, DashboardInvitation, UserDashboardSettings, PDFExtraction, EXPENSE_CATEGORIES, AnalyticsSession, Asset, Watchlist, WatchlistItem, TradeIdea, TradeAgentRun, TrendScanRun, TrendScanEvent, MarketSnapshot, FundamentalSnapshot, ScreenerDefinition, TickerFetchState, TickerSnapshotLatest, TickerDailyBar, TickerIntradayBar, MappingRuleSet, MappingRuleEntry, CsvAiJob, CsvAiJobBatch
 
 
 def ensure_schema_compatibility():
@@ -3506,6 +3641,156 @@ def update_selected_investing_watchlist(dashboard_id):
     return jsonify({
         'message': 'Selected watchlist updated successfully',
         'selected_watchlist': serialize_watchlist(selected_watchlist)
+    })
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/stocks/compare', methods=['GET'])
+def get_investing_stock_comparison(dashboard_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    symbols_param = (request.args.get('symbols') or '').strip()
+    symbols = [normalize_symbol(token) for token in symbols_param.split(',') if normalize_symbol(token)]
+    unique_symbols = []
+    for symbol in symbols:
+        if symbol not in unique_symbols:
+            unique_symbols.append(symbol)
+    symbols = unique_symbols[:3]
+    if len(symbols) < 2:
+        return jsonify({'error': 'Provide 2 or 3 ticker symbols for comparison.'}), 400
+
+    series = []
+    for symbol in symbols:
+        asset = Asset.query.filter_by(symbol=symbol).first()
+        if not asset:
+            continue
+        bars = (
+            TickerDailyBar.query.filter(
+                TickerDailyBar.asset_id == asset.id,
+                TickerDailyBar.bar_date >= datetime(2025, 1, 1).date()
+            )
+            .order_by(TickerDailyBar.bar_date.asc())
+            .all()
+        )
+        baseline = next((bar.close for bar in bars if bar.close not in (None, 0)), None)
+        if baseline in (None, 0):
+            continue
+        points = []
+        for bar in bars:
+            if bar.close in (None, 0):
+                continue
+            points.append({
+                'time': bar.bar_date.isoformat(),
+                'value': ((bar.close / baseline) - 1.0) * 100.0,
+            })
+        if points:
+            series.append({'symbol': symbol, 'points': points})
+
+    return jsonify({
+        'series_type': 'comparison',
+        'symbols': symbols,
+        'series': series,
+    })
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/stocks/<string:symbol>', methods=['GET'])
+def get_investing_stock_detail(dashboard_id, symbol):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    try:
+        asset = resolve_investing_asset(symbol)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Failed to resolve investing asset", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id'], 'symbol': symbol})
+        return jsonify({'error': f'Failed to load stock: {exc}'}), 500
+
+    return jsonify({'stock': serialize_stock_detail(asset)})
+
+
+@app.route('/api/dashboard/<int:dashboard_id>/investing/stocks/<string:symbol>/chart', methods=['GET'])
+def get_investing_stock_chart(dashboard_id, symbol):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    member = get_dashboard_member_or_none(dashboard_id, session['user_id'])
+    if not member:
+        return jsonify({'error': 'Access denied'}), 403
+
+    mode = (request.args.get('mode') or 'daily').strip().lower()
+    if mode not in ('daily', 'hourly'):
+        return jsonify({'error': 'Unsupported chart mode'}), 400
+
+    try:
+        asset = resolve_investing_asset(symbol)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Failed to resolve chart asset", extra={'dashboard_id': dashboard_id, 'user_id': session['user_id'], 'symbol': symbol})
+        return jsonify({'error': f'Failed to load chart data: {exc}'}), 500
+
+    if mode == 'daily':
+        range_start = datetime(2025, 1, 1).date()
+        rows = (
+            TickerDailyBar.query.filter(
+                TickerDailyBar.asset_id == asset.id,
+                TickerDailyBar.bar_date >= range_start
+            )
+            .order_by(TickerDailyBar.bar_date.asc())
+            .all()
+        )
+        points = serialize_candlestick_points(rows, mode='daily')
+        range_end = rows[-1].bar_date.isoformat() if rows else None
+        return jsonify({
+            'symbol': asset.symbol,
+            'mode': 'daily',
+            'series_type': 'candlestick',
+            'points': points,
+            'range_start': range_start.isoformat(),
+            'range_end': range_end,
+        })
+
+    latest_intraday = (
+        TickerIntradayBar.query.filter_by(asset_id=asset.id)
+        .order_by(TickerIntradayBar.bar_timestamp.desc())
+        .first()
+    )
+    if latest_intraday is None:
+        return jsonify({
+            'symbol': asset.symbol,
+            'mode': 'hourly',
+            'series_type': 'candlestick',
+            'points': [],
+            'range_start': None,
+            'range_end': None,
+        })
+
+    rows = (
+        TickerIntradayBar.query.filter(TickerIntradayBar.asset_id == asset.id)
+        .order_by(TickerIntradayBar.bar_timestamp.desc())
+        .limit(24)
+        .all()
+    )
+    rows.reverse()
+    points = serialize_candlestick_points(rows, mode='hourly')
+    range_end_dt = rows[-1].bar_timestamp if rows else latest_intraday.bar_timestamp
+    range_start_dt = rows[0].bar_timestamp if rows else latest_intraday.bar_timestamp
+    return jsonify({
+        'symbol': asset.symbol,
+        'mode': 'hourly',
+        'series_type': 'candlestick',
+        'points': points,
+        'range_start': range_start_dt.isoformat(),
+        'range_end': range_end_dt.isoformat(),
     })
 
 
